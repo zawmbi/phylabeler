@@ -28,3 +28,9 @@ __pycache__/
 *.pyc
 *.pyo
 .phylabeler_cache/
+names.dmp
+nodes.dmp
+
+# Video script and its build (local only, not for GitHub)
+video/
+*.pdf
