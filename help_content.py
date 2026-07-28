@@ -38,8 +38,8 @@ PANEL_HELP = {
         "Reading Results",
     ),
     "search": (
-        "Highlight every tip whose name contains this text and scroll the\n"
-        "tree to the first match.\n\n"
+        "Ring every tip AND clade name containing this text, and scroll the\n"
+        "tree until at least one of them is on screen - in either view.\n\n"
         "Useful for checking where a suspect sequence actually sits.",
         "Reading Results",
     ),
@@ -118,19 +118,20 @@ The tree has its own zoom, described under "The Tree View".
 
 COLOUR THEMES
 
-View > Colour Theme offers six palettes, and your choice is remembered
-between runs:
+View > Colour Theme offers seven palettes. Your choice is remembered between
+runs, so whichever one you pick is the one you get next launch:
 
-    Dark (default)      the original
-    Light (cream)       warm and low-glare, good for long sessions
-    Dark (warm brown)   the same idea as the default, without the grey
-    Black and white     no hue at all - for printing and photocopying
-    Terminal green      high-contrast phosphor green
-    Colour-blind safe   orange and blue instead of red and green
+    Dark (default)              the original
+    Light (cream)               warm and low-glare, good for long sessions
+    Coffee (warm brown)         the same idea as the default, without the grey
+    Black and white             no hue at all - for printing and photocopying
+    Terminal green              high-contrast phosphor green
+    Colour-blind safe           orange and blue instead of red and green
+    Colour-blind safe (dark)    the same, on a dark background
 
-The last two are not decoration. Conflict status normally rides on red
+The last three are not decoration. Conflict status normally rides on red
 against green, which is exactly the pair that red-green colour blindness
-collapses - around 8% of men - so the colour-blind theme swaps in orange and
+collapses - around 8% of men - so the colour-blind themes swap in orange and
 blue, which stay distinct under every common form. The black-and-white theme
 has no hue to work with at all, so it marks conflicting branches with a
 dashed line instead: that survives greyscale printing, which colour never
@@ -152,18 +153,28 @@ THE TREE VIEW
 
 WHAT THE COLOURS MEAN
 
+The key sits under the tree itself and is drawn from whichever theme you are
+using, so it always shows the marks actually on screen rather than the ones
+the default theme would have used. Untick "Legend" in the Show row to reclaim
+the space; the setting is remembered between runs.
+
 Branches are coloured by the status of the clade below them:
-    green   agrees with the taxonomy
-    red     conflicts with it
-    grey    could not be assessed
+    Monophyletic      agrees with the taxonomy
+    Not monophyletic  conflicts with it
+    Not assessed      no taxon to judge it against
 
 Tip names carry their own colour, which reports match quality rather than
 conflict:
-    dark    matched a taxon exactly
-    amber   matched only after dropping name tokens, so it sits at a coarser
-            rank than the label suggests
-    grey    matched nothing and is excluded from the analysis
-    red     intrudes into the group you currently have selected
+    exact             matched a taxon exactly
+    Inexact match     matched only after dropping name tokens, so it sits at
+                      a coarser rank than the label suggests
+    Unmatched tip     matched nothing and is excluded from the analysis
+    Intruding tip     intrudes into the group you currently have selected
+
+The hues themselves vary by theme, which is the point: the colour-blind
+palettes carry conflict on orange against blue rather than red against green,
+and the black-and-white theme has no hue to spend at all, so it marks a
+conflicting branch with a dashed line. The legend shows the dash.
 
 The small grey numbers are the support values from your file. Clade names sit
 on opaque chips so they stay readable over the branches.
@@ -179,6 +190,37 @@ somewhere else.
     Reset     back to 100%
     Expand    give the tree the entire right-hand column
     F11       full screen
+
+Selecting a clade in the results tables highlights it in the tree and scrolls
+to it, in both the rectangular and the circular view. In the circular view the
+selection is the wedge of angles the clade occupies, carried out past the tips
+so the names in the group fall inside it.
+
+FIND
+
+The Find box sits on the Results bar, next to the tables it searches
+alongside. It matches clade names as well as tip names, so typing "hypn"
+finds the Hypnanae chip drawn on the canvas rather than reporting nothing.
+
+Every match is ringed on the tree, in both the rectangular and the circular
+view, and the view scrolls until at least one of them is on screen - along
+both axes, because a clade's name sits far to the left of the tips it spans
+and a purely vertical scroll could leave every hit off the edge. Matching a
+clade also selects the tips underneath it. The band behind a selection is
+drawn only when the matches form one unbroken run: a search scattered across
+the tree has no single region to shade, and pretending otherwise would claim
+everything between the hits was selected too.
+
+PANELS
+
+The dividers between panels are the controls. Drag one to resize, and
+double-click it to collapse the panel it points at or restore it to the size
+it had. That applies to the controls column and to the split between the tree
+and the results, so any panel can be closed or opened without a button for it.
+
+The file list grows with the number of trees loaded rather than reserving the
+whole column up front, so a single tree no longer leaves most of the left-hand
+side empty.
 
 Selecting a row in the results tables frames that clade: if it is too big for
 the current zoom the view zooms out to fit it, but it never zooms in, so a
@@ -203,7 +245,7 @@ WHEN LABELS DISAPPEAR
 Labels are placed so they never sit on top of one another. Bigger clades are
 placed first, so when two nested groups compete for the same spot the more
 inclusive one keeps it. A name that has to shift gets a thin leader line back
-to its own branch.
+to its own branch.https://github.com/zawmbi/phylabeler
 
 If a name still cannot fit it is dropped rather than drawn over its
 neighbour, and the count is reported next to the display toggles, e.g.

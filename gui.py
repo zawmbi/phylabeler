@@ -56,6 +56,20 @@ MARGIN_LEFT = 46          # room for support values left of the root
 MARGIN_TOP = 20
 LABEL_GUTTER_PAD = 24     # breathing room right of the longest tip name
 
+# The file list grows with its contents between these bounds. Below the max
+# the panel is only as deep as it needs to be, so a session with one tree
+# stops reserving a third of the left column for nothing.
+TREE_LIST_MIN_ROWS = 3
+TREE_LIST_MAX_ROWS = 12
+
+TICK_ON = "☑"        # ballot box with check
+TICK_OFF = "☐"       # empty ballot box
+TICK_HIT_WIDTH = 26       # px from a row's left edge that toggles the tick
+
+SASH_THICKNESS = 9        # thick enough to aim at, thin enough to ignore
+SASH_HIT_SLOP = 14        # px from the sash that still counts as hitting it
+SASH_EDGE_ZONE = 26       # within this of an end, a pane counts as collapsed
+
 # Circular layout. The sweep stops short of a full turn so the root stays
 # visible and the reading order is obvious.
 CIRCLE_RADIUS = 340       # outer radius at zoom 1.0
@@ -125,7 +139,7 @@ THEMES["Light (cream)"] = {
     "info_icon": "#1f6f8b", "tooltip_bg": "#fffdf6", "tooltip_fg": "#3b342a",
 }
 
-THEMES["Dark (warm brown)"] = {
+THEMES["Coffee (warm brown)"] = {
     "conflict_dash": None,
     "mono": "#6a9a4a", "non_mono": "#d1603d", "unresolved": "#8a7c6d",
     "inexact": "#c99a3c", "support": "#9c8c7a", "clade_band": "#5a4632",
@@ -146,8 +160,12 @@ THEMES["Black and white"] = {
     # solid, conflicting ones black and dashed. Both survive greyscale
     # printing and photocopying, which colour never does.
     "conflict_dash": (5, 3),
+    # The four greys are spread on lightness alone, since that is the only
+    # channel this theme has. #606060 for inexact sat 5 dE from the #6e6e6e
+    # of mono - indistinguishable to anyone, colour vision or not - which the
+    # legend puts side by side and makes obvious.
     "mono": "#6e6e6e", "non_mono": "#000000", "unresolved": "#909090",
-    "inexact": "#606060", "support": "#707070", "clade_band": "#e6e6e6",
+    "inexact": "#3a3a3a", "support": "#707070", "clade_band": "#e6e6e6",
     "chip_edge": "#000000", "tip": "#000000", "branch": "#000000",
     "bg": "#ffffff", "highlight": "#d0d0d0",
     "header_bg": "#000000", "header_fg": "#ffffff",
@@ -192,7 +210,33 @@ THEMES["Colour-blind safe"] = {
     "info_icon": "#0072b2", "tooltip_bg": "#ffffff", "tooltip_fg": "#1b2a38",
 }
 
+THEMES["Colour-blind safe (dark)"] = {
+    "conflict_dash": None,
+    # The same Okabe-Ito reasoning as the light version, lifted onto a dark
+    # canvas. #0072b2 reads as near-black against a dark background, so
+    # agreement moves up to sky blue and conflict to orange; that pair stays
+    # separable under deuteranopia, protanopia and tritanopia alike. Pink for
+    # inexact and neutral grey for unresolved keep all four statuses apart on
+    # lightness as well as hue.
+    "mono": "#56b4e9", "non_mono": "#e69f00", "unresolved": "#707c87",
+    "inexact": "#d4a5c9", "support": "#7f8b98", "clade_band": "#24374a",
+    "chip_edge": "#4a5a6a", "tip": "#e9eef3", "branch": "#8592a0",
+    "bg": "#10161c", "highlight": "#f0e442",
+    "header_bg": "#1b2733", "header_fg": "#eef3f7",
+    "app_bg": "#141b22", "panel_bg": "#1d252e", "panel_edge": "#37424e",
+    "text": "#e9eef3", "muted_text": "#b0bcc7",
+    "button_bg": "#dfe6ec", "button_fg": "#141b22",
+    "tab_bg": "#222c37", "tab_active": "#dfe6ec", "tab_active_fg": "#141b22",
+    "field_bg": "#0d1319", "field_fg": "#eef3f7",
+    "info_icon": "#56b4e9", "tooltip_bg": "#eef3f7", "tooltip_fg": "#141b22",
+}
+
 DEFAULT_THEME = "Dark (default)"
+
+# Themes that have been renamed. Without this a settings file naming the old
+# theme would fall through to the default and quietly discard a choice the
+# user had already made.
+THEME_ALIASES = {"Dark (warm brown)": "Coffee (warm brown)"}
 
 # The live palette. Mutated, never rebound.
 COLORS = dict(THEMES[DEFAULT_THEME])
@@ -200,6 +244,7 @@ COLORS = dict(THEMES[DEFAULT_THEME])
 
 def apply_theme(name):
     """Swap the live palette in place. Returns the name actually applied."""
+    name = THEME_ALIASES.get(name, name)
     palette = THEMES.get(name)
     if palette is None:
         name, palette = DEFAULT_THEME, THEMES[DEFAULT_THEME]
@@ -267,17 +312,22 @@ class TextScaler:
         bar = ttk.Frame(parent)
         ttk.Label(bar, text=label).pack(side=tk.LEFT)
         self._smaller = ttk.Button(bar, text="A−", width=3,
-                                   style="App.TButton",
+                                   style="Stepper.TButton",
                                    command=lambda: self.zoom(-1))
-        self._smaller.pack(side=tk.LEFT, padx=(6, 2))
+        self._smaller.pack(side=tk.LEFT, padx=(6, 0))
+        Tooltip(self._smaller, "Smaller text  (Ctrl/Cmd −)")
         self._bigger = ttk.Button(bar, text="A+", width=3,
-                                  style="App.TButton",
+                                  style="Stepper.TButton",
                                   command=lambda: self.zoom(1))
-        self._bigger.pack(side=tk.LEFT, padx=2)
-        ttk.Button(bar, text="Reset", style="App.TButton",
-                   command=self.reset).pack(side=tk.LEFT, padx=(6, 2))
-        self._label = ttk.Label(bar, text="")
-        self._label.pack(side=tk.LEFT, padx=10)
+        self._bigger.pack(side=tk.LEFT, padx=(1, 0))
+        Tooltip(self._bigger, "Larger text  (Ctrl/Cmd +)")
+        # Readout first, then Reset: the number belongs to the stepper that
+        # changes it, not stranded on the far side of another button.
+        self._label = ttk.Label(bar, text="", width=6, anchor="center",
+                                style="Readout.TLabel")
+        self._label.pack(side=tk.LEFT, padx=(8, 6))
+        ttk.Button(bar, text="Reset", style="Quiet.TButton",
+                   command=self.reset).pack(side=tk.LEFT)
         if hint:
             ttk.Label(bar, text=hint,
                       foreground=COLORS["muted_text"]).pack(side=tk.RIGHT)
@@ -424,6 +474,115 @@ class Tooltip:
             self.window = None
 
 
+class LegendBar(tk.Canvas):
+    """Key to the marks the tree draws, sitting directly under the tree.
+
+    A canvas rather than a row of ttk.Labels because not every distinction
+    the tree makes is a colour. The black-and-white theme carries conflict on
+    a dash pattern, and an intruding tip is called out by weight as well as
+    hue - a coloured square would quietly misreport both. Each swatch is
+    drawn the same way the tree draws the thing it stands for.
+
+    Colours are read from COLORS at draw time and never cached, so a theme
+    switch is one redraw away and the colour-blind palettes are described in
+    their own terms rather than in the default theme's.
+    """
+
+    # (swatch kind, palette key, caption). Order runs branches, then tips,
+    # then selection - the same order the eye meets them on the canvas.
+    ENTRIES = (
+        ("line", "mono", "Monophyletic"),
+        ("conflict", "non_mono", "Not monophyletic"),
+        ("line", "branch", "Not assessed"),
+        ("bold", "non_mono", "Intruding tip"),
+        ("text", "inexact", "Inexact match"),
+        ("text", "unresolved", "Unmatched tip"),
+        ("band", "clade_band", "Selected clade"),
+    )
+
+    SWATCH_W = 26       # long enough to show two dashes of a dash pattern
+    GAP = 5             # swatch to its caption
+    SPACING = 15        # between entries
+    PAD = 5
+    ROW_H = 18
+
+    def __init__(self, parent, **pack_kwargs):
+        super().__init__(parent, highlightthickness=0,
+                         height=self.ROW_H + 2 * self.PAD)
+        self._pack_kwargs = pack_kwargs
+        self._font = tkfont.Font(family="Helvetica", size=9)
+        self._heading_font = tkfont.Font(family="Helvetica", size=9,
+                                         weight="bold")
+        self._height = None
+        self.bind("<Configure>", lambda _e: self.redraw())
+
+    # ---- visibility ----
+
+    def show(self):
+        """Pack back into the slot it was built for, not onto the end."""
+        self.pack(**self._pack_kwargs)
+        self.redraw()
+
+    def hide(self):
+        self.pack_forget()
+
+    def visible(self):
+        return bool(self.winfo_manager())
+
+    # ---- drawing ----
+
+    def redraw(self):
+        """Lay the entries out across the available width, wrapping as needed."""
+        self.delete("all")
+        self.configure(bg=COLORS["bg"])
+        width = self.winfo_width()
+        if width <= 1:
+            return      # not laid out yet; the <Configure> binding calls back
+
+        heading = "Key"
+        self.create_text(self.PAD, self.PAD + self.ROW_H / 2, text=heading,
+                         anchor="w", fill=COLORS["support"],
+                         font=self._heading_font)
+        left = self.PAD + self._heading_font.measure(heading) + self.SPACING
+
+        x, y, rows = left, self.PAD, 1
+        for kind, key, caption in self.ENTRIES:
+            entry_w = self.SWATCH_W + self.GAP + self._font.measure(caption)
+            if x > left and x + entry_w > width - self.PAD:
+                x, y = self.PAD, y + self.ROW_H
+                rows += 1
+            self._draw_entry(kind, key, caption, x, y)
+            x += entry_w + self.SPACING
+
+        # Only resize when the row count actually changed: configure() fires
+        # another <Configure>, and reasserting the same height every time
+        # would leave the two bouncing off each other forever.
+        needed = rows * self.ROW_H + 2 * self.PAD
+        if needed != self._height:
+            self._height = needed
+            self.configure(height=needed)
+
+    def _draw_entry(self, kind, key, caption, x, y):
+        colour = COLORS[key]
+        mid = y + self.ROW_H / 2
+        if kind in ("line", "conflict"):
+            dash = COLORS.get("conflict_dash") if kind == "conflict" else None
+            self.create_line(x, mid, x + self.SWATCH_W, mid, fill=colour,
+                             width=2.5, **({"dash": dash} if dash else {}))
+        elif kind == "band":
+            self.create_rectangle(x, mid - 5, x + self.SWATCH_W, mid + 5,
+                                  fill=colour, outline=COLORS["chip_edge"])
+        else:
+            self.create_text(
+                x + self.SWATCH_W / 2, mid, text="Aa", fill=colour,
+                font=("Helvetica", 9, "bold" if kind == "bold" else "normal"))
+        # Captions take the canvas text colour, not the panel's: this widget
+        # sits on the tree's background, which in several themes is the
+        # opposite lightness to the surrounding chrome.
+        self.create_text(x + self.SWATCH_W + self.GAP, mid, text=caption,
+                         anchor="w", fill=COLORS["tip"], font=self._font)
+
+
 class PhyLabelerApp:
     """Main application window."""
 
@@ -435,14 +594,17 @@ class PhyLabelerApp:
 
         # State
         self.db = TaxonomyDB()
-        self.theme_name = apply_theme(
-            self._load_settings().get("theme", DEFAULT_THEME))
+        settings = self._load_settings()
+        self.theme_name = apply_theme(settings.get("theme", DEFAULT_THEME))
         self.theme_var = tk.StringVar(value=self.theme_name)
+        self.show_legend_var = tk.BooleanVar(
+            value=bool(settings.get("legend", True)))
         self._configure_styles()
         self.current_tree = None
         self.results = None
         self.unresolved_tips = []
         self.tree_files = []        # For batch mode
+        self.file_enabled = {}      # path -> included in batch runs
         self.batch_results = {}     # filename -> analysis dict
         self.taxon_results = []     # One entry per named taxonomic group
         self.groups = []            # Taxa merged when they cover the same tips
@@ -450,11 +612,13 @@ class PhyLabelerApp:
         self.tip_matches = {}       # tip label -> TipMatch
         self.highlight_tips = set()      # Tips of the selected clade
         self.highlight_intruders = set()  # Tips that break the selected group
+        self.search_hits = set()         # id(node) for every search match
         self._temp_dirs = []        # Scratch dirs for archive extraction
         self._redraw_job = None     # Pending debounced canvas redraw
         self._hidden_labels = 0     # Clade chips omitted for lack of room
         self.tree_expanded = False  # Tree pane given the whole column
         self._results_sash = None   # Sash position to restore
+        self._sash_memory = {}      # Pane key -> width to restore on reopen
         self._fullscreen = False
         self._busy = False          # An analysis is running
         # Keyed by (widget name, row id): Treeview row ids are only unique
@@ -474,13 +638,50 @@ class PhyLabelerApp:
         # a blank sliver, which reads as a broken control rather than as a
         # pane that needs dragging.
         self.root.after_idle(self._fit_left_pane)
+        self.root.after_idle(self._fit_vertical_split)
         self._check_cache()
+
+    def _fit_vertical_split(self):
+        """Open the tree/results split so the controls column fits unscrolled.
+
+        The column can scroll, but the primary action lives at its bottom and
+        a Run button you have to go looking for is a worse default than a
+        slightly shorter results panel. Capped, so a tall controls column
+        cannot squeeze the results away entirely.
+        """
+        try:
+            self.root.update_idletasks()
+            total = self.right_pane.winfo_height()
+            if total <= 1:
+                return
+            needed = self.controls_frame.winfo_reqheight() + 24
+            self.right_pane.sashpos(
+                0, max(int(total * 0.5), min(needed, int(total * 0.72))))
+        except tk.TclError:
+            pass    # window torn down before it was ever mapped
+
+    def _sync_left_scroll(self):
+        """Keep the controls column's scrollregion and scrollbar honest."""
+        canvas, inner = self.left_canvas, self.controls_frame
+        canvas.itemconfigure(self._controls_window,
+                             width=max(canvas.winfo_width(), 1))
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        overflowing = inner.winfo_reqheight() > canvas.winfo_height()
+        if overflowing and not self.left_scroll.winfo_manager():
+            self.left_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        elif not overflowing and self.left_scroll.winfo_manager():
+            self.left_scroll.pack_forget()
+            canvas.yview_moveto(0.0)   # nothing above to scroll back to
 
     def _fit_left_pane(self):
         """Widen the split so no control in the left panel is cut off."""
         try:
             self.left_frame.update_idletasks()
-            needed = self.left_frame.winfo_reqwidth() + 16
+            # Measure the panels, not their container: the column is a canvas
+            # now, and a canvas reports the width it was given rather than the
+            # width its contents need.
+            needed = (self.controls_frame.winfo_reqwidth()
+                      + self.left_scroll.winfo_reqwidth() + 16)
             if self.main_pane.sashpos(0) < needed:
                 self.main_pane.sashpos(0, needed)
         except tk.TclError:
@@ -505,7 +706,57 @@ class PhyLabelerApp:
         self._configure_styles()
         self._restyle_widgets(self.root)
         self.results_scaler.apply()      # re-asserts the table style
+        self.legend.redraw()             # swatches are the new palette's
         self._draw_now()
+        self._save_settings()
+
+    def _make_collapsible(self, pane, horizontal, key, default):
+        """Make a sash collapse and restore the panes it divides.
+
+        Dragging always worked, but there was no way to push a panel fully out
+        of the way and no way to get it back, so every pane that needed
+        closing grew a button. Double-clicking the divider closes the panel it
+        is pointing at; double-clicking again restores it to the size it had.
+        The edge is the control, which leaves Expand as the only button that
+        moves a panel - and that one earns its place by being a shortcut for
+        the common case rather than the only way in.
+        """
+        pane.bind(
+            "<Double-Button-1>",
+            lambda event: self._toggle_pane(event, pane, horizontal, key,
+                                            default))
+        Tooltip(pane, "Drag to resize  ·  double-click to collapse or restore")
+
+    def _toggle_pane(self, event, pane, horizontal, key, default):
+        try:
+            current = pane.sashpos(0)
+        except tk.TclError:
+            return None
+        # A double-click anywhere inside a child lands on the child, but be
+        # explicit: only a hit near the divider itself is this gesture.
+        offset = event.x if horizontal else event.y
+        if abs(offset - current) > SASH_HIT_SLOP:
+            return None
+
+        extent = (pane.winfo_width() if horizontal
+                  else pane.winfo_height()) or 1
+        if current <= SASH_EDGE_ZONE or current >= extent - SASH_EDGE_ZONE:
+            pane.sashpos(0, self._sash_memory.get(key) or default)
+        else:
+            self._sash_memory[key] = current
+            # Collapse toward the nearer end, so the gesture always closes the
+            # smaller panel rather than whichever one the code happened to
+            # list first.
+            pane.sashpos(0, 0 if current < extent / 2 else extent)
+        self._redraw_tree()
+        return "break"
+
+    def _toggle_legend(self):
+        """Show or hide the colour key under the tree, and remember which."""
+        if self.show_legend_var.get():
+            self.legend.show()
+        else:
+            self.legend.hide()
         self._save_settings()
 
     def _restyle_widgets(self, widget):
@@ -522,7 +773,13 @@ class PhyLabelerApp:
                     highlightbackground=COLORS["panel_edge"],
                     highlightcolor=COLORS["panel_edge"])
             elif isinstance(child, tk.Canvas):
-                child.configure(bg=COLORS["bg"])
+                # The controls column is a canvas too, but it is chrome, not
+                # a drawing surface - given the tree's background it turned
+                # white behind the panels in every dark theme.
+                child.configure(
+                    bg=COLORS["app_bg"]
+                    if child is getattr(self, "left_canvas", None)
+                    else COLORS["bg"])
             elif isinstance(child, tk.Toplevel):
                 child.configure(bg=COLORS["app_bg"])
             self._restyle_widgets(child)
@@ -544,7 +801,8 @@ class PhyLabelerApp:
     def _save_settings(self):
         try:
             with open(self._settings_path(), "w", encoding="utf-8") as handle:
-                json.dump({"theme": self.theme_name}, handle)
+                json.dump({"theme": self.theme_name,
+                           "legend": self.show_legend_var.get()}, handle)
         except OSError:
             pass          # a read-only cache dir is not worth an error dialog
 
@@ -579,26 +837,112 @@ class PhyLabelerApp:
         style.configure(
             "TPanedwindow",
             background=COLORS["app_bg"],
-            sashthickness=6,
+            sashthickness=SASH_THICKNESS,
         )
+        # The divider has to look like something you can grab. It was a 6px
+        # strip of the window background - indistinguishable from padding -
+        # which is why panels needed buttons to resize them at all. Given a
+        # contrasting fill and a row of grip dots it reads as a handle, and
+        # the double-click-to-collapse gesture has something to sit on.
         style.configure(
-            "App.TButton",
-            background=COLORS["button_bg"],
-            foreground=COLORS["button_fg"],
-            bordercolor=COLORS["panel_edge"],
+            "Sash",
+            background=COLORS["panel_edge"],
+            lightcolor=COLORS["panel_edge"],
+            bordercolor=COLORS["app_bg"],
+            sashthickness=SASH_THICKNESS,
+            gripcount=14,
+            handlesize=0,
+        )
+        # One button surface for the whole app. button_bg is a near-white chip
+        # in every dark theme, so painting every control with it turned the
+        # buttons into the brightest objects on screen and left the content
+        # they act on looking like the background. Buttons take the panel
+        # surface and the panel's own text colour, and read as buttons through
+        # a border and a hover state instead of through sheer brightness.
+        # Hardcoded greys are gone too: they were invisible in half the themes.
+        chrome = {
+            "background": COLORS["panel_bg"],
+            "foreground": COLORS["text"],
+            "bordercolor": COLORS["panel_edge"],
+            "lightcolor": COLORS["panel_edge"],
+            "darkcolor": COLORS["panel_edge"],
+            "focuscolor": "none",
+        }
+        chrome_map = {
+            "background": [
+                ("pressed", COLORS["highlight"]),
+                ("active", COLORS["tab_bg"]),
+                ("disabled", COLORS["app_bg"]),
+            ],
+            "foreground": [
+                ("pressed", COLORS["button_fg"]),
+                ("disabled", COLORS["panel_edge"]),
+            ],
+        }
+        style.configure("App.TButton", padding=(10, 6), **chrome)
+        style.map("App.TButton", **chrome_map)
+        # A stepper is not a general-purpose button. Zoom −/+ and text A−/A+
+        # are one control with two ends, clicked over and over, so they get a
+        # tight square footprint and sit flush against each other. Given the
+        # App.TButton treatment they read as two more peers of Reset and Fit,
+        # which is exactly the wrong grouping.
+        style.configure(
+            "Stepper.TButton",
+            # Vertical padding tuned so a stepper stands exactly as tall as
+            # the Quiet buttons beside it - a 2px mismatch on one row reads
+            # as a misaligned control, not as a deliberate hierarchy.
+            padding=(0, 5),
+            anchor="center",
+            font=("Helvetica", 12, "bold"),
+            **chrome,
+        )
+        style.map("Stepper.TButton", **chrome_map)
+        # Secondary actions sitting beside a stepper - Reset, Fit, Expand.
+        # Flat until hovered, because a row where five controls shout equally
+        # loudly gives the eye nowhere to land; the stepper is the control
+        # being used, these are the ones being reached for occasionally.
+        style.configure(
+            "Quiet.TButton",
+            background=COLORS["app_bg"],
+            # Quiet is about the *fill*, not the label. Dimming the text to
+            # muted_text as well left Reset and Fit almost unreadable on the
+            # dark bars - a control you cannot find is not restrained, it is
+            # broken. Full text colour, no chrome until you hover.
+            foreground=COLORS["text"],
+            bordercolor=COLORS["app_bg"],
+            lightcolor=COLORS["app_bg"],
+            darkcolor=COLORS["app_bg"],
+            relief="flat",
             focuscolor="none",
-            padding=(10, 6),
+            padding=(9, 4),
+            # ttk's stock TButton carries width=-11, a minimum of eleven
+            # characters. That is what stretched "Fit" to the width of
+            # "Reset" and left the row a wall of identical slabs; 0 lets each
+            # label size its own button.
+            width=0,
         )
         style.map(
-            "App.TButton",
+            "Quiet.TButton",
             background=[
-                ("active", "#ffffff"),
-                ("pressed", "#dcdcdc"),
-                ("disabled", "#c8c8c8"),
+                ("active", COLORS["button_bg"]),
+                ("pressed", COLORS["button_bg"]),
             ],
             foreground=[
-                ("disabled", "#666666"),
+                ("active", COLORS["button_fg"]),
+                ("pressed", COLORS["button_fg"]),
+                ("disabled", COLORS["muted_text"]),
             ],
+            bordercolor=[("active", COLORS["panel_edge"])],
+            lightcolor=[("active", COLORS["button_bg"])],
+            darkcolor=[("active", COLORS["button_bg"])],
+        )
+        # The value a stepper is reporting - "100%", "10 pt". State, not a
+        # control, so it is muted and centred in a fixed width; left to size
+        # itself it shoves the row sideways every time it crosses a digit.
+        style.configure(
+            "Readout.TLabel",
+            background=COLORS["app_bg"],
+            foreground=COLORS["muted_text"],
         )
         style.configure(
             "TCheckbutton",
@@ -715,13 +1059,31 @@ class PhyLabelerApp:
         self.root.option_add("*TCombobox*Listbox.selectForeground",
                              COLORS["button_fg"])
 
-        style.configure(
-            "TScrollbar",
-            background=COLORS["panel_bg"],
-            troughcolor=COLORS["app_bg"],
-            bordercolor=COLORS["panel_edge"],
-            arrowcolor=COLORS["text"],
-        )
+        # Scrollbars: clam draws the thumb with its own bevel colours, and
+        # leaving lightcolor/darkcolor at the theme default produced a pale
+        # slab that was the brightest object on a dark window - worse, right
+        # next to the tree it was framing.
+        for scrollbar_style in ("TScrollbar", "Vertical.TScrollbar",
+                                "Horizontal.TScrollbar"):
+            style.configure(
+                scrollbar_style,
+                background=COLORS["panel_edge"],
+                troughcolor=COLORS["app_bg"],
+                bordercolor=COLORS["app_bg"],
+                lightcolor=COLORS["panel_edge"],
+                darkcolor=COLORS["panel_edge"],
+                arrowcolor=COLORS["muted_text"],
+                gripcount=0,
+                relief="flat",
+            )
+            style.map(
+                scrollbar_style,
+                background=[("active", COLORS["muted_text"]),
+                            ("pressed", COLORS["muted_text"])],
+                lightcolor=[("active", COLORS["muted_text"])],
+                darkcolor=[("active", COLORS["muted_text"])],
+                arrowcolor=[("active", COLORS["text"])],
+            )
 
     def _build_ui(self):
         """Build the complete UI layout."""
@@ -792,18 +1154,58 @@ class PhyLabelerApp:
         self.root.bind("<Escape>", lambda e: (self._fullscreen
                                               and self._toggle_fullscreen()))
 
-        # Main layout: left panel + right panel
-        main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        main_pane.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Main layout: a controls-and-tree row above, results across the full
+        # width below.
+        #
+        # Results used to be nested inside the right-hand column, which cost
+        # it the width of the controls panel for its whole height - so the
+        # tables were clipped mid-column while the bottom of the controls
+        # column sat empty. The tables are the widest thing in the app and the
+        # controls are the shortest, so the split that suits both is
+        # horizontal at the top and full-bleed underneath.
+        outer_pane = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
+        outer_pane.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Named right_pane still: it is the pane whose sash Expand drives, and
+        # everything that reaches for it wants the tree/results divider.
+        self.right_pane = outer_pane
+        self._make_collapsible(outer_pane, horizontal=False, key="results",
+                               default=420)
+
+        top_row = ttk.Frame(outer_pane)
+        outer_pane.add(top_row, weight=3)
+
+        main_pane = ttk.PanedWindow(top_row, orient=tk.HORIZONTAL)
+        main_pane.pack(fill=tk.BOTH, expand=True)
         self.main_pane = main_pane
+        self._make_collapsible(main_pane, horizontal=True, key="controls",
+                               default=320)
 
         # ---- Left panel: controls + file list ----
+        # Scrollable, because this column no longer owns the window's full
+        # height - it shares the top row with the tree. Its three panels plus
+        # a long file list can exceed that, and the alternative to scrolling
+        # is silently clipping whichever control is packed last. The scrollbar
+        # only appears when the content actually overflows.
         left_frame = ttk.Frame(main_pane, width=320)
         main_pane.add(left_frame, weight=1)
         self.left_frame = left_frame
 
+        self.left_canvas = tk.Canvas(left_frame, highlightthickness=0,
+                                     bg=COLORS["app_bg"], width=300)
+        self.left_scroll = ttk.Scrollbar(left_frame, orient=tk.VERTICAL,
+                                         command=self.left_canvas.yview)
+        self.left_canvas.configure(yscrollcommand=self.left_scroll.set)
+        self.left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        controls = ttk.Frame(self.left_canvas)
+        self._controls_window = self.left_canvas.create_window(
+            (0, 0), window=controls, anchor="nw")
+        controls.bind("<Configure>", lambda _e: self._sync_left_scroll())
+        self.left_canvas.bind("<Configure>", lambda _e: self._sync_left_scroll())
+        self.controls_frame = controls
+
         # Taxonomy DB status
-        db_frame = self._panel(left_frame, "Taxonomy Database", "taxonomy")
+        db_frame = self._panel(controls, "Taxonomy Database", "taxonomy")
         db_frame.pack(fill=tk.X, padx=5, pady=5)
 
         self.db_status_var = tk.StringVar(value="Not loaded")
@@ -822,8 +1224,9 @@ class PhyLabelerApp:
             db_btn_frame.grid_columnconfigure(column, weight=1)
 
         # Tree files list
-        tree_frame = self._panel(left_frame, "Tree Files", "trees")
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        tree_frame = self._panel(controls, "Tree Files", "trees")
+        tree_frame.pack(fill=tk.X, padx=5, pady=5)
+        self.tree_panel = tree_frame
 
         tree_btn_frame = ttk.Frame(tree_frame)
         tree_btn_frame.pack(fill=tk.X, padx=5, pady=2)
@@ -835,20 +1238,35 @@ class PhyLabelerApp:
                            row=0, column=column, sticky="ew", padx=2)
             tree_btn_frame.grid_columnconfigure(column, weight=1)
 
-        self.tree_listbox = tk.Listbox(tree_frame, selectmode=tk.BROWSE)
-        self.tree_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
-        self.tree_listbox.bind("<<ListboxSelect>>", self._on_tree_select)
-        self.tree_listbox.configure(
-            bg=COLORS["field_bg"],
-            fg=COLORS["field_fg"],
-            selectbackground=COLORS["highlight"],
-            selectforeground=COLORS["button_fg"],
-            highlightbackground=COLORS["panel_edge"],
-            highlightcolor=COLORS["panel_edge"],
-        )
+        # The list is sized to its contents rather than given the whole
+        # column. One tree used to reserve a panel deep enough for thirty and
+        # left most of the left-hand side as an empty black box; the space it
+        # was hoarding now goes to the panels below it and, past
+        # TREE_LIST_MAX_ROWS, to a scrollbar instead of more emptiness.
+        # A Treeview rather than a Listbox, because each row now carries a
+        # tick as well as a name. Excluding a tree from a batch used to mean
+        # clearing the list and re-adding everything except that one; now it
+        # is one click, and Run Batch Analysis re-runs whatever is still
+        # ticked.
+        list_frame = ttk.Frame(tree_frame)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
+        self.tree_listbox = ttk.Treeview(
+            list_frame, show="tree", selectmode="browse",
+            height=TREE_LIST_MIN_ROWS)
+        self.tree_list_scroll = ttk.Scrollbar(
+            list_frame, orient=tk.VERTICAL, command=self.tree_listbox.yview)
+        self.tree_listbox.configure(yscrollcommand=self.tree_list_scroll.set)
+        self.tree_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.tree_listbox.column("#0", width=200, stretch=True)
+        self.tree_listbox.bind("<<TreeviewSelect>>", self._on_tree_select)
+        # Button-1 before the selection handler: a click on the tick toggles
+        # it and stops there, so ticking a tree does not also load it.
+        self.tree_listbox.bind("<Button-1>", self._on_tree_click, add="")
+        self.tree_listbox.bind("<space>", self._toggle_selected_file)
 
-        # Analysis controls
-        analysis_frame = self._panel(left_frame, "Analysis", "analysis")
+        # Analysis controls.
+        #
+        analysis_frame = self._panel(controls, "Analysis", "analysis")
         analysis_frame.pack(fill=tk.X, padx=5, pady=5)
 
         self.run_button = ttk.Button(
@@ -894,27 +1312,13 @@ class PhyLabelerApp:
             command=self._populate_group_tables).pack(
                 anchor="w", padx=5, pady=(0, 4))
 
-        # Tip search
-        search_frame = self._panel(left_frame, "Find Tip", "search")
-        search_frame.pack(fill=tk.X, padx=5, pady=5)
+        # Search lives in the Results panel, not here - see _build_ui below.
         self.search_var = tk.StringVar()
-        search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
-        search_entry.pack(fill=tk.X, padx=5, pady=4)
-        search_entry.bind("<Return>", lambda e: self._search_tips())
-        self.search_var.trace_add("write", lambda *a: self._search_tips())
 
-        # ---- Right panel: tree view + results ----
-        right_frame = ttk.Frame(main_pane)
-        main_pane.add(right_frame, weight=3)
-
-        right_pane = ttk.PanedWindow(right_frame, orient=tk.VERTICAL)
-        right_pane.pack(fill=tk.BOTH, expand=True)
-        self.right_pane = right_pane
-
-        # Tree visualization
-        tree_view_frame = self._panel(right_pane, "Tree Visualization",
+        # ---- Tree view: fills the rest of the top row ----
+        tree_view_frame = self._panel(main_pane, "Tree Visualization",
                                      "tree_view")
-        right_pane.add(tree_view_frame, weight=3)
+        main_pane.add(tree_view_frame, weight=3)
 
         # Canvas with scrollbars for tree drawing
         canvas_frame = ttk.Frame(tree_view_frame)
@@ -944,23 +1348,28 @@ class PhyLabelerApp:
         self.zoom_var = tk.DoubleVar(value=ZOOM_DEFAULT)
         ttk.Label(zoom_frame, text="Zoom:").pack(side=tk.LEFT)
         self.zoom_out_button = ttk.Button(
-            zoom_frame, text="−", width=3, style="App.TButton",
+            zoom_frame, text="−", width=2, style="Stepper.TButton",
             command=lambda: self._step_zoom(-1))
-        self.zoom_out_button.pack(side=tk.LEFT, padx=(6, 2))
+        self.zoom_out_button.pack(side=tk.LEFT, padx=(6, 0))
+        Tooltip(self.zoom_out_button, "Zoom out  (Ctrl/Cmd −)")
         self.zoom_in_button = ttk.Button(
-            zoom_frame, text="+", width=3, style="App.TButton",
+            zoom_frame, text="+", width=2, style="Stepper.TButton",
             command=lambda: self._step_zoom(1))
-        self.zoom_in_button.pack(side=tk.LEFT, padx=2)
-        ttk.Button(zoom_frame, text="Reset", style="App.TButton",
-                   command=self._reset_zoom).pack(side=tk.LEFT, padx=(6, 2))
-        ttk.Button(zoom_frame, text="Fit", style="App.TButton",
-                   command=self._zoom_to_fit).pack(side=tk.LEFT, padx=2)
-        self.zoom_label = ttk.Label(zoom_frame, text="100%", width=6)
-        self.zoom_label.pack(side=tk.LEFT, padx=(6, 0))
+        self.zoom_in_button.pack(side=tk.LEFT, padx=(1, 0))
+        Tooltip(self.zoom_in_button, "Zoom in  (Ctrl/Cmd +)")
+        self.zoom_label = ttk.Label(zoom_frame, text="100%", width=6,
+                                    anchor="center", style="Readout.TLabel")
+        self.zoom_label.pack(side=tk.LEFT, padx=(8, 6))
+        ttk.Button(zoom_frame, text="Reset", style="Quiet.TButton",
+                   command=self._reset_zoom).pack(side=tk.LEFT)
+        ttk.Button(zoom_frame, text="Fit", style="Quiet.TButton",
+                   command=self._zoom_to_fit).pack(side=tk.LEFT, padx=(2, 0))
+        # Expand resizes the pane, not the tree, so it sits apart from the
+        # zoom cluster rather than reading as one more zoom control.
         self.expand_button = ttk.Button(
-            zoom_frame, text="Expand ⤢", style="App.TButton",
+            zoom_frame, text="Expand ⤢", style="Quiet.TButton",
             command=self._toggle_tree_expanded)
-        self.expand_button.pack(side=tk.LEFT, padx=(10, 2))
+        self.expand_button.pack(side=tk.RIGHT, padx=(10, 2))
 
         # Display toggles get their own row. Sharing one with the zoom
         # controls meant the row overflowed once Fit and Expand were added,
@@ -985,6 +1394,10 @@ class PhyLabelerApp:
                         variable=self.show_branch_lengths_var,
                         command=self._redraw_tree).pack(side=tk.LEFT, padx=6)
 
+        ttk.Checkbutton(display_frame, text="Legend",
+                        variable=self.show_legend_var,
+                        command=self._toggle_legend).pack(side=tk.LEFT, padx=6)
+
         ttk.Label(display_frame, text="  View:").pack(side=tk.LEFT,
                                                      padx=(12, 0))
         self.view_mode_var = tk.StringVar(value="Rectangular")
@@ -998,16 +1411,44 @@ class PhyLabelerApp:
                                     foreground=COLORS["muted_text"])
         self.label_note.pack(side=tk.RIGHT)
 
+        # The key goes beside the tree, not only in Help. Which hue means
+        # conflict is a property of the current theme, and a reader looking at
+        # an orange branch should not have to leave the tree to find out what
+        # orange means. Built last so it can be packed into its slot above the
+        # zoom row, and re-packed there when toggled back on.
+        self.legend = LegendBar(tree_view_frame, fill=tk.X, padx=5,
+                                pady=(0, 2), before=zoom_frame)
+        if self.show_legend_var.get():
+            self.legend.show()
+
         # Results panel
-        results_frame = self._panel(right_pane, "Results", "results")
-        right_pane.add(results_frame, weight=2)
+        results_frame = self._panel(outer_pane, "Results", "results")
+        outer_pane.add(results_frame, weight=2)
 
         # Text size applies to the whole results panel - the two text tabs
         # and the row/heading font of the three tables - so switching tabs
         # never lands on a control that does nothing.
-        self.results_scaler.build_controls(
-            results_frame, hint="(Ctrl/Cmd +, −, 0)").pack(
-                fill=tk.X, padx=5, pady=(4, 0))
+        results_bar = self.results_scaler.build_controls(
+            results_frame, hint="(Ctrl/Cmd +, −, 0)")
+        results_bar.pack(fill=tk.X, padx=5, pady=(4, 0))
+
+        # Find rides along on the Results bar rather than owning a panel in
+        # the left column. It searches what the results describe and marks it
+        # in the tree, so it belongs next to them - and the row it joins had
+        # a wide empty middle, so the whole panel's worth of height came back
+        # for free.
+        ttk.Separator(results_bar, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=(14, 10), pady=2)
+        ttk.Label(results_bar, text="Find:").pack(side=tk.LEFT)
+        search_entry = ttk.Entry(results_bar, textvariable=self.search_var,
+                                 width=22)
+        search_entry.pack(side=tk.LEFT, padx=(6, 0))
+        search_entry.bind("<Return>", lambda e: self._search_tips())
+        self.search_var.trace_add("write", lambda *a: self._search_tips())
+        Tooltip(search_entry, PANEL_HELP["search"][0])
+        self.search_note = ttk.Label(results_bar, text="",
+                                     style="Readout.TLabel")
+        self.search_note.pack(side=tk.LEFT, padx=(8, 0))
 
         # Notebook for different result views
         self.results_notebook = ttk.Notebook(results_frame)
@@ -1376,22 +1817,84 @@ class PhyLabelerApp:
                 "Error", f"Failed to read {os.path.basename(archive)}:\n{e}")
             return []
 
+    def _resize_tree_list(self):
+        """Fit the file list to how many files there actually are.
+
+        Under the cap the panel takes only the depth it needs and the spare
+        height goes to the panels below it. At the cap it stops growing and a
+        scrollbar appears, which is a better use of the space than a taller
+        box that is still mostly empty.
+        """
+        count = len(self.tree_files)
+        rows = max(TREE_LIST_MIN_ROWS, min(count, TREE_LIST_MAX_ROWS))
+        self.tree_listbox.configure(height=rows)
+
+        if count > rows and not self.tree_list_scroll.winfo_manager():
+            self.tree_list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        elif count <= rows and self.tree_list_scroll.winfo_manager():
+            self.tree_list_scroll.pack_forget()
+        # The panel always takes exactly its content's height: the column
+        # around it scrolls now, so there is no spare height here to claim and
+        # nothing below it to squeeze out.
+        self._sync_left_scroll()
+
+    def _row_text(self, filepath):
+        tick = TICK_ON if self.file_enabled.get(filepath, True) else TICK_OFF
+        return f" {tick}  {os.path.basename(filepath)}"
+
+    def _enabled_files(self):
+        """The trees a batch run should cover, in list order."""
+        return [fp for fp in self.tree_files if self.file_enabled.get(fp, True)]
+
+    def _on_tree_click(self, event):
+        """Toggle a row's tick when the click lands on it."""
+        row = self.tree_listbox.identify_row(event.y)
+        if not row or event.x > TICK_HIT_WIDTH:
+            return None         # a normal click: let it select and load
+        self._toggle_file(row)
+        return "break"
+
+    def _toggle_selected_file(self, _event=None):
+        for row in self.tree_listbox.selection():
+            self._toggle_file(row)
+        return "break"
+
+    def _toggle_file(self, filepath):
+        """Include or exclude one tree without disturbing the rest of the list."""
+        if filepath not in self.file_enabled:
+            return
+        self.file_enabled[filepath] = not self.file_enabled[filepath]
+        self.tree_listbox.item(filepath, text=self._row_text(filepath))
+        enabled = len(self._enabled_files())
+        self._update_status(
+            f"{os.path.basename(filepath)} "
+            f"{'included' if self.file_enabled[filepath] else 'excluded'}"
+            f" - {enabled} of {_plural(len(self.tree_files), 'tree')} "
+            f"in the next batch run")
+
     def _add_tree_files(self, filepaths, select_last=False):
         """Add tree paths to the file list, skipping duplicates."""
         for fp in filepaths:
             if fp not in self.tree_files:
                 self.tree_files.append(fp)
-                self.tree_listbox.insert(tk.END, os.path.basename(fp))
+                self.file_enabled[fp] = True
+                # The path is the row id, so every later lookup is a dict hit
+                # rather than an index that shifts when the list changes.
+                self.tree_listbox.insert("", tk.END, iid=fp,
+                                         text=self._row_text(fp))
+        self._resize_tree_list()
 
         if select_last and self.tree_files:
-            self.tree_listbox.selection_clear(0, tk.END)
-            idx = len(self.tree_files) - 1
-            self.tree_listbox.selection_set(idx)
-            self._load_tree(self.tree_files[idx])
+            last = self.tree_files[-1]
+            self.tree_listbox.selection_set(last)
+            self.tree_listbox.see(last)
+            self._load_tree(last)
 
     def _clear_trees(self):
         self.tree_files.clear()
-        self.tree_listbox.delete(0, tk.END)
+        self.file_enabled.clear()
+        self.tree_listbox.delete(*self.tree_listbox.get_children())
+        self._resize_tree_list()
         self.current_tree = None
         self.batch_results.clear()
         self.tree_canvas.delete("all")
@@ -1399,9 +1902,9 @@ class PhyLabelerApp:
         self._clear_results()
 
     def _on_tree_select(self, event):
-        sel = self.tree_listbox.curselection()
-        if sel:
-            self._load_tree(self.tree_files[sel[0]])
+        selection = self.tree_listbox.selection()
+        if selection:
+            self._load_tree(selection[0])
 
     def _load_tree(self, filepath):
         """Parse and display a tree file."""
@@ -1440,6 +1943,7 @@ class PhyLabelerApp:
         self.unresolved_tips = []
         self.highlight_tips = set()
         self.highlight_intruders = set()
+        self.search_hits = set()
 
     # ---- Tree Drawing ----
 
@@ -1580,6 +2084,35 @@ class PhyLabelerApp:
         highlight = self.highlight_tips
         line_width = max(0.7, 1.2 * zoom)
 
+        # Band behind the selected clade, drawn first so branches sit on top.
+        # The rectangular view has always had one; without its equivalent here
+        # a click in the results table moved the selection to somewhere on a
+        # circle with nothing to say where, which is the whole reason picking
+        # a clade felt ambiguous in this view. A clade occupies a contiguous
+        # run of angles, so its band is the wedge those angles sweep - carried
+        # out past the tips so the names in the group are inside it too.
+        if highlight and self._highlight_is_contiguous():
+            tips = self.current_tree.get_tip_nodes()
+            angles = [angle_of[id(t)] for t in tips if t.label in highlight]
+            if angles:
+                # Half a tip-slot of padding at each end, so the outermost
+                # members sit inside the wedge rather than on its edge.
+                pad = CIRCLE_SWEEP / max(1, len(tips)) / 2
+                reach = cx * 0.98        # centre to the edge of the label ring
+                canvas.create_arc(
+                    cx - reach, cy - reach, cx + reach, cy + reach,
+                    start=min(angles) - pad,
+                    extent=max(max(angles) - min(angles) + 2 * pad, 0.75),
+                    style=tk.PIESLICE, fill=COLORS["clade_band"], outline="")
+                # Punch the hub back out. A pie slice runs to the centre, and
+                # the disc inside the first ring is the root's, not the
+                # selected clade's - leaving it filled says the selection
+                # reaches all the way down, which it does not.
+                canvas.create_oval(
+                    cx - CIRCLE_INNER, cy - CIRCLE_INNER,
+                    cx + CIRCLE_INNER, cy + CIRCLE_INNER,
+                    fill=COLORS["bg"], outline="")
+
         for node in self.current_tree.pre_order():
             if not node.children:
                 continue
@@ -1609,6 +2142,9 @@ class PhyLabelerApp:
         if not self.show_labels_var.get():
             self.label_note.configure(text="labels off")
             self._hidden_labels = 0
+            # Marks still go on with labels off - that is the case where a
+            # ring is the only thing telling you where a hit is.
+            self._draw_search_marks(canvas, positions, zoom)
             canvas.configure(scrollregion=(0, 0, size, size))
             return
 
@@ -1683,7 +2219,42 @@ class PhyLabelerApp:
 
         self._hidden_labels = hidden
         self._describe_hidden_labels(hidden, room, spacing)
+        self._draw_search_marks(canvas, positions, zoom)
         canvas.configure(scrollregion=(0, 0, size, size))
+
+    def _highlight_is_contiguous(self):
+        """True when the highlighted tips form one unbroken run.
+
+        The band behind a selection only means anything for a clade, which is
+        always contiguous in tip order. A search can match tips scattered all
+        over the tree, and banding min-to-max there paints over most of the
+        drawing and claims everything between the hits is selected.
+        """
+        highlight = self.highlight_tips
+        if not highlight:
+            return False
+        indices = [i for i, tip in enumerate(self.current_tree.get_tip_nodes())
+                   if tip.label in highlight]
+        return bool(indices) and \
+            indices[-1] - indices[0] + 1 == len(indices)
+
+    def _draw_search_marks(self, canvas, positions, zoom):
+        """Ring every node the search matched, so a hit is findable by eye.
+
+        Colour alone cannot do this: a matched tip may already be coloured by
+        match quality or by conflict, and a matched clade is a name on a chip
+        somewhere in the drawing. A ring is a mark nothing else uses.
+        """
+        radius = max(4.0, 6.0 * zoom)
+        for node in self.current_tree.pre_order():
+            if id(node) not in self.search_hits:
+                continue
+            spot = positions.get(id(node))
+            if spot is None:
+                continue
+            x, y = spot
+            canvas.create_oval(x - radius, y - radius, x + radius, y + radius,
+                               outline=COLORS["highlight"], width=2)
 
     def _branch_dash(self, node):
         """Dash pattern for a branch, when the theme encodes status without hue."""
@@ -1730,7 +2301,7 @@ class PhyLabelerApp:
         intruders = self.highlight_intruders
 
         # Band behind the selected clade, drawn first so branches sit on top.
-        if highlight:
+        if highlight and self._highlight_is_contiguous():
             ys = [positions[id(n)][1] for n in self.current_tree.get_tip_nodes()
                   if n.label in highlight]
             if ys:
@@ -1782,6 +2353,7 @@ class PhyLabelerApp:
         if not show_labels:
             self._hidden_labels = 0
             self.label_note.configure(text="labels off")
+            self._draw_search_marks(canvas, positions, zoom)
             canvas.configure(scrollregion=(0, 0, width, height))
             return
 
@@ -1859,6 +2431,7 @@ class PhyLabelerApp:
 
         self._hidden_labels = hidden
         self._describe_hidden_labels(hidden, room_for_tip_labels, tip_spacing)
+        self._draw_search_marks(canvas, positions, zoom)
         canvas.configure(scrollregion=(0, 0, width, height))
 
     # ---- Zoom ----
@@ -2030,9 +2603,8 @@ class PhyLabelerApp:
         # Read the selection HERE, on the main thread. Tk widgets are not
         # thread-safe and querying one from the worker is undefined behaviour
         # that happens to work most of the time.
-        selection = self.tree_listbox.curselection()
-        selected_name = (os.path.basename(self.tree_files[selection[0]])
-                         if selection else None)
+        selection = self.tree_listbox.selection()
+        selected_name = (os.path.basename(selection[0]) if selection else None)
 
         def analyze():
             checker = MonophylyChecker(self.db)
@@ -2070,13 +2642,24 @@ class PhyLabelerApp:
             messagebox.showwarning("No Trees", "Load tree files first.")
             return
 
-        selection = self.tree_listbox.curselection()
-        selected_path = self.tree_files[selection[0]] if selection else None
+        # Only the ticked trees. Untick one and press this again to re-run
+        # without it - the point of the ticks is that excluding a tree costs
+        # a click rather than rebuilding the whole list.
+        targets = self._enabled_files()
+        if not targets:
+            messagebox.showwarning(
+                "No Trees Included",
+                "Every tree in the list is unticked. Tick at least one to "
+                "include it in the batch run.")
+            return
+
+        selection = self.tree_listbox.selection()
+        selected_path = selection[0] if selection else None
 
         def analyze_batch():
             checker = MonophylyChecker(self.db)
-            total = len(self.tree_files)
-            for idx, fp in enumerate(self.tree_files):
+            total = len(targets)
+            for idx, fp in enumerate(targets):
                 basename = os.path.basename(fp)
                 self._update_status(
                     f"Analyzing {basename} ({idx + 1}/{total})...")
@@ -2088,8 +2671,10 @@ class PhyLabelerApp:
                 except Exception as e:
                     self._update_status(f"Error in {basename}: {e}")
 
+            skipped = len(self.tree_files) - total
             self._update_status(
-                f"Batch analysis complete: {len(self.batch_results)} trees")
+                f"Batch analysis complete: {_plural(total, 'tree')}"
+                + (f", {skipped} unticked and skipped" if skipped else ""))
 
             # Refresh current view, using the path captured before the
             # worker started rather than querying the listbox from here.
@@ -2329,10 +2914,80 @@ class PhyLabelerApp:
             self._scroll_canvas_to((min(ys) + max(ys)) / 2, height)
 
     # Kept for the tip search, which frames a single tip and must not rezoom.
+    def _scroll_to_nodes(self, nodes):
+        """Centre the viewport on specific nodes, in whichever layout shows.
+
+        Both axes, deliberately. A search hit can be off-screen sideways as
+        easily as vertically - the internal node carrying a clade name sits
+        far to the left of the tips it spans - and scrolling only vertically
+        was why a match could be reported and still not be anywhere on
+        screen.
+        """
+        if not nodes:
+            return
+        zoom = self.zoom_var.get()
+        if self.view_mode_var.get() == "Circular":
+            positions, _angles, _radii, _centre, size = \
+                self._layout_circular(zoom)
+            width = height = size
+        else:
+            positions, width, height = self._layout_tree(zoom)
+
+        points = [positions[id(node)] for node in nodes
+                  if id(node) in positions]
+        if not points:
+            return
+        canvas = self.tree_canvas
+        for moveto, values, first, view, extent in (
+                (canvas.xview_moveto, [x for x, _ in points], points[0][0],
+                 canvas.winfo_width() or 1, width),
+                (canvas.yview_moveto, [y for _, y in points], points[0][1],
+                 canvas.winfo_height() or 1, height)):
+            # Centring the bounding box only helps while the box fits. Nested
+            # matches - Rosales, Rosaceae, Rosoideae - span most of the tree,
+            # and centring that box framed the empty middle with every hit
+            # off both edges. Wider than the viewport, fall back to the first
+            # hit, which at least guarantees one of them is on screen.
+            if max(values) - min(values) > view:
+                target = first
+            else:
+                target = (min(values) + max(values)) / 2
+            moveto(max(0.0, min(1.0, (target - view / 2) / max(extent, 1))))
+
     def _scroll_to_highlight(self):
-        positions, _width, height = self._layout_tree(self.zoom_var.get())
+        """Bring the selected clade into view, in whichever layout is showing.
+
+        This used to lay the tree out rectangularly no matter what was on
+        screen, so in circular view it scrolled to a y computed for a drawing
+        that was not there - landing somewhere arbitrary and making a clade
+        click look broken. A fan needs both axes moved, not just the vertical.
+        """
+        zoom = self.zoom_var.get()
+        selected = self.highlight_tips
+        if not selected:
+            return
+
+        if self.view_mode_var.get() == "Circular":
+            positions, _angles, _radii, _centre, size = \
+                self._layout_circular(zoom)
+            points = [positions[id(n)]
+                      for n in self.current_tree.get_tip_nodes()
+                      if n.label in selected]
+            if not points:
+                return
+            x_mid = (min(x for x, _ in points) + max(x for x, _ in points)) / 2
+            y_mid = (min(y for _, y in points) + max(y for _, y in points)) / 2
+            for axis, centre_of, extent in (
+                    (self.tree_canvas.xview_moveto, x_mid,
+                     self.tree_canvas.winfo_width() or 1),
+                    (self.tree_canvas.yview_moveto, y_mid,
+                     self.tree_canvas.winfo_height() or 1)):
+                axis(max(0.0, min(1.0, (centre_of - extent / 2) / max(size, 1))))
+            return
+
+        positions, _width, height = self._layout_tree(zoom)
         ys = [positions[id(n)][1] for n in self.current_tree.get_tip_nodes()
-              if n.label in self.highlight_tips]
+              if n.label in selected]
         if ys:
             self._scroll_canvas_to((min(ys) + max(ys)) / 2, height)
 
@@ -2459,10 +3114,34 @@ class PhyLabelerApp:
                     "<Shift-Button-5>"):
             widget.bind(seq, on_scroll, add="+")
 
+    def _bind_mousewheel_to_tree(self, widget, target):
+        """Scroll `target` from anywhere inside `widget`.
+
+        Labels and frames do not scroll themselves, so without this the wheel
+        did nothing over most of the controls column - only over the gaps
+        between panels, which reads as the wheel being broken.
+        """
+        if widget is self.tree_listbox or widget is self.tree_list_scroll:
+            return          # the file list scrolls itself
+        def on_scroll(event):
+            step = mousewheel_units(event)
+            if step:
+                target.yview_scroll(step, "units")
+            return "break"
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            widget.bind(seq, on_scroll, add="+")
+        for child in widget.winfo_children():
+            self._bind_mousewheel_to_tree(child, target)
+
     def _bind_scroll_wheels(self):
         """Attach mouse wheel scrolling to all scrollable panels."""
         self._bind_mousewheel(self.tree_listbox, yview=True)
         self._bind_mousewheel(self.tree_canvas, yview=True, xview=True)
+        # The controls column and every static panel inside it, so the wheel
+        # works wherever the pointer happens to be resting in that column.
+        self._bind_mousewheel(self.left_canvas, yview=True)
+        for panel in self.controls_frame.winfo_children():
+            self._bind_mousewheel_to_tree(panel, self.left_canvas)
         for seq in ("<Control-MouseWheel>", "<Command-MouseWheel>"):
             self.tree_canvas.bind(seq, self._zoom_by_wheel, add="+")
         self._bind_mousewheel(self.summary_text, yview=True)
@@ -2472,26 +3151,52 @@ class PhyLabelerApp:
         self._bind_mousewheel(self.unresolved_text, yview=True)
 
     def _search_tips(self):
-        """Highlight tips matching the search box and scroll to the first."""
+        """Highlight everything matching the search box and scroll to it.
+
+        Two things were wrong with this. It looked only at tips, so typing a
+        group that is drawn right there on the canvas - "hypn" for Hypnanae -
+        reported no match at all. And it scrolled using the rectangular
+        layout whatever view was showing, so in the circular view it jumped
+        to a coordinate belonging to a drawing that was not on screen. Both
+        added up to a Find that did not visibly find anything.
+        """
         query = self.search_var.get().strip().lower()
+        self.search_hits = set()
         if not self.current_tree:
             return
         if not query:
             self.highlight_tips = set()
+            self.search_note.configure(text="")
             self._redraw_tree()
             return
 
-        matches = [n for n in self.current_tree.get_tip_nodes()
-                   if query in n.label.lower()]
-        self.highlight_tips = {n.label for n in matches}
+        tips, clades = [], []
+        for node in self.current_tree.pre_order():
+            if node.label and query in node.label.lower():
+                (tips if node.is_tip else clades).append(node)
+
+        self.search_hits = {id(n) for n in tips + clades}
+        selected = {node.label for node in tips}
+        for clade in clades:
+            selected.update(tip.label for tip in clade.get_tip_nodes())
+        self.highlight_tips = selected
         self._draw_tree()
 
-        if matches:
-            positions, _width, height = self._layout_tree(self.zoom_var.get())
-            self._scroll_canvas_to(positions[id(matches[0])][1], height)
-            self._update_status(f"{len(matches)} tip(s) match '{query}'")
-        else:
-            self._update_status(f"No tips match '{query}'")
+        if not self.search_hits:
+            self.search_note.configure(text="no match")
+            self._update_status(f"Nothing in the tree matches '{query}'")
+            return
+
+        # Scroll to the matches themselves, not to the selection they imply.
+        # Nested clades like Rosales span most of the tree, so centring on the
+        # tips they cover lands between the hits rather than on one.
+        self._scroll_to_nodes(tips + clades)
+        found = [part for part in
+                 (_plural(len(tips), "tip") if tips else "",
+                  _plural(len(clades), "clade") if clades else "") if part]
+        summary = " + ".join(found)
+        self.search_note.configure(text=summary)
+        self._update_status(f"{summary} matching '{query}'")
 
     def _set_busy(self, busy):
         """Disable the analysis buttons while work is in flight.
