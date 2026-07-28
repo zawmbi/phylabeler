@@ -45,13 +45,15 @@ Matching text *and* the row and heading font of the three tables, so switching
 tabs never lands on a control that does nothing. Results and help sizes are
 independent.
 
-The window has four tabs:
+The window has five tabs:
 
 - **Getting Started** — the four-step workflow and how tip names are matched
-- **Reading Results** — what "tips to move", the conflict types and the merged
-  rows mean
-- **Applications** — what kinds of study this tool is for, and what it can't
-  tell you
+- **The Tree View** — colours, zoom, rectangular vs circular, and why labels
+  disappear when they do
+- **Reading Results** — what "tips to move", the conflict types, alternative
+  repairs and the merged rows mean
+- **Applications** — what kinds of study this tool is for, what organisms it
+  covers, and what it can't tell you
 - **Project Guide** — the architecture notes from `docs/ONBOARDING.md`
 
 ## Reading the results
@@ -80,9 +82,31 @@ appears once, rather than repeating at every nested node beneath it.
   and which names are ambiguous across unrelated taxa. Tips that match nothing
   are reported, never counted as intruders.
 
+**One tip explains it** names the sequence to check. When several tips would
+repair a group equally well the cell reads `Cucurbita_pepo or 2 others`, and
+selecting the row lists them all — with only two sampled members of a group
+the tree genuinely cannot say which one moved, and naming one as the answer
+would be a guess dressed as a finding.
+
 Bootstrap/support values in the input are preserved. Labelled trees are written
 as `Fabaceae/98` by default; `--label-format taxon` or `support` writes just one
 or the other.
+
+## The tree view
+
+Branches are green where the tree agrees with the taxonomy and red where it
+conflicts; tip colour reports match quality. Zoom runs 10%–400% in discrete
+steps (`−` / `+`, or Ctrl/Cmd + scroll), **Fit** sizes the tree to the panel,
+**Expand** gives it the whole column, and **F11** is full screen.
+
+**View** switches between a rectangular cladogram and a circular fan. The fan
+is the one to use on large trees: the bundled 232-tip tree needs about nine
+screenfuls of scrolling as a rectangle and under three as a circle, and that
+gap widens with tree size.
+
+Labels never overlap — bigger clades win the spot, shifted names get a leader
+line, and anything that still won't fit is dropped with the count shown beside
+the display toggles rather than vanishing silently.
 
 ## Taxonomy input
 

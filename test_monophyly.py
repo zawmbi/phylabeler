@@ -407,6 +407,127 @@ def test_collapsing_and_culprits(db):
           all(ranked[f] == 0 for f in flies), True)
 
 
+def test_pruning():
+    print("\nPruning removes tips without distorting what is left")
+    from tree_parser import copy_tree, prune_tips
+
+    def pruned(newick, drop):
+        root, removed, missing = prune_tips(parse_newick(newick), drop)
+        text = root.to_newick(True, "support") + ";" if root else None
+        return text, removed, missing
+
+    check("unary parent is spliced out",
+          pruned("((a:1,b:2)90:3,(c:4,d:5)80:6);", ["a"])[0],
+          "(b:5,(c:4,d:5)80:6);")
+    check("emptying a clade removes it and collapses the root",
+          pruned("((a:1,b:2)90:3,(c:4,d:5)80:6);", ["a", "b"])[0],
+          "(c:4,d:5);")
+    check("a unary root collapses",
+          pruned("(((a,b),c),d);", ["d"])[0], "((a,b),c);")
+    check("a polytomy stays a polytomy",
+          pruned("(a,b,c,d);", ["a"])[0], "(b,c,d);")
+    check("refuses to leave fewer than two tips",
+          pruned("((a,b),(c,d));", ["a", "b", "c"])[0], None)
+    check("labels not in the tree are reported, not fatal",
+          pruned("((a,b),(c,d));", ["zzz"])[2], ["zzz"])
+    check("every tip carrying a duplicated label goes",
+          pruned("(((a,b),a),c);", ["a"])[1], ["a", "a"])
+
+    original = parse_newick("((a:0.1,b:0.2)95:0.3,(c:0.4,d:0.5)88:0.6)100;")
+    duplicate = copy_tree(original)
+    check("a copy is identical",
+          duplicate.to_newick(True, "support"),
+          original.to_newick(True, "support"))
+    prune_tips(duplicate, ["a"])
+    check("pruning the copy leaves the original alone",
+          original.count_tips(), 4)
+
+    sys.setrecursionlimit(1000)
+    ladder = "t0"
+    for index in range(1, 4000):
+        ladder = f"({ladder},t{index})"
+    deep = copy_tree(parse_newick(ladder + ";"))
+    check("a 4000-tip ladder copies without recursing", deep.count_tips(), 4000)
+    check("and prunes", prune_tips(deep, ["t0"])[0].count_tips(), 3999)
+
+
+def test_removal_simulation(db):
+    checker = MonophylyChecker(db)
+
+    def simulate(newick, drop):
+        tree = parse_newick(newick)
+        out = checker.analyze(tree)
+        sim = checker.simulate_removal(
+            tree, out["tip_lineages"], out["unresolved"], drop,
+            out["taxon_results"])
+        return tree, sim, {c.name: c for c in sim.changes}
+
+    print("\nRemoving an intruder is confirmed by re-analysis")
+    tree, sim, by_name = simulate(
+        "(((Homo_sapiens,Drosophila_melanogaster),Homo_erectus),"
+        "(Drosophila_simulans,Rosa_canina));", ["Drosophila_melanogaster"])
+    check("Homo comes out monophyletic", by_name["Homo"].outcome, "resolved")
+    check("fewer broken groups than before",
+          sim.broken_after < sim.broken_before, True)
+    check("nothing became broken", sim.newly_broken, [])
+    check("the analysed tree is untouched", tree.count_tips(), 5)
+
+    print("\nA group that loses its members is reported as dropped, not fixed")
+    check("Drosophila is not called resolved",
+          by_name["Drosophila"].outcome, "dropped_small")
+    check("and its cost after is blank rather than zero",
+          by_name["Drosophila"].cost_after, None)
+
+    print("\nRemoving an unmatched tip provably changes nothing")
+    tree, sim, by_name = simulate(
+        "(((Homo_sapiens,Xyzzy_qqq),Homo_erectus),"
+        "(Drosophila_melanogaster,Drosophila_simulans));", ["Xyzzy_qqq"])
+    check("flagged as a no-op", sim.only_unresolved, True)
+    check("no group changed cost",
+          [c.name for c in sim.changes
+           if c.cost_after is not None and c.cost_after != c.cost_before], [])
+
+    print("\nRefusals")
+    tree = parse_newick("((Homo_sapiens,Homo_erectus),Drosophila_melanogaster);")
+    out = checker.analyze(tree)
+    sim = checker.simulate_removal(tree, out["tip_lineages"],
+                                   out["unresolved"], ["Not_a_tip"],
+                                   out["taxon_results"])
+    check("unknown labels are refused with a reason",
+          bool(sim.refused) and sim.missing == ["Not_a_tip"], True)
+    sim = checker.simulate_removal(
+        tree, out["tip_lineages"], out["unresolved"],
+        ["Homo_sapiens", "Homo_erectus"], out["taxon_results"])
+    check("refuses to leave fewer than two tips", bool(sim.refused), True)
+
+    print("\nInvariants over a battery of trees")
+    trees = [
+        "(((Homo_sapiens,Drosophila_melanogaster),Homo_erectus),"
+        "(Drosophila_simulans,Rosa_canina));",
+        "((Homo_sapiens,(Drosophila_melanogaster,Drosophila_simulans)),"
+        "Homo_erectus);",
+        "((Homo_sapiens,Homo_erectus,Rosa_canina,Homo_habilis),"
+        "Drosophila_melanogaster,Drosophila_simulans,Drosophila_yakuba,"
+        "Homo_naledi);",
+    ]
+    rose = broke = 0
+    for newick in trees:
+        tree = parse_newick(newick)
+        out = checker.analyze(tree)
+        for victim in sorted({t.label for t in tree.get_tip_nodes()}):
+            sim = checker.simulate_removal(
+                tree, out["tip_lineages"], out["unresolved"], [victim],
+                out["taxon_results"])
+            if sim.refused:
+                continue
+            broke += len(sim.newly_broken)
+            rose += sum(1 for c in sim.changes
+                        if c.cost_after is not None
+                        and c.cost_after > c.cost_before)
+    check("removing a tip never raises a group's cost", rose, 0)
+    check("removing a tip never breaks an intact group", broke, 0)
+
+
 def main():
     db = build_db()
     test_name_resolution(db)
@@ -415,6 +536,8 @@ def main():
     test_monophyly(db)
     test_conflict_costs(db)
     test_collapsing_and_culprits(db)
+    test_pruning()
+    test_removal_simulation(db)
     print(f"\n{_passed} passed, {_failed} failed")
     return 1 if _failed else 0
 

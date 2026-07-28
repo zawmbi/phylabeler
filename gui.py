@@ -12,6 +12,8 @@ A graphical interface for bioinformaticians to:
 Pure Python stdlib (tkinter) - no external dependencies.
 """
 
+import json
+import math
 import os
 import shutil
 import tempfile
@@ -52,7 +54,20 @@ LEVEL_STEP_MIN = 10       # never squeeze levels below this
 PHYLOGRAM_WIDTH = 620     # px the longest root-to-tip path spans
 MARGIN_LEFT = 46          # room for support values left of the root
 MARGIN_TOP = 20
-LABEL_GUTTER = 320        # room for tip names right of the last node
+LABEL_GUTTER_PAD = 24     # breathing room right of the longest tip name
+
+# Circular layout. The sweep stops short of a full turn so the root stays
+# visible and the reading order is obvious.
+CIRCLE_RADIUS = 340       # outer radius at zoom 1.0
+CIRCLE_INNER = 18         # the root is a disc, not a point
+CIRCLE_START = 95         # degrees; just past 12 o'clock
+CIRCLE_SWEEP = 350        # degrees of arc the tips occupy
+CIRCLE_LABEL_OFFSET = 14  # push clade names out along their own spoke
+
+# Discrete zoom stops, so each click is a visible change and the ends are
+# hard limits.
+ZOOM_LEVELS = (0.1, 0.15, 0.25, 0.35, 0.5, 0.7, 1.0, 1.4, 2.0, 2.8, 4.0)
+ZOOM_DEFAULT = 1.0
 
 
 # ---- Text sizing ----
@@ -69,37 +84,129 @@ RESULTS_DEFAULT_FONT_SIZE = 10
 RESULTS_TREE_STYLE = "Results.Treeview"
 
 
-# ---- Color scheme ----
-COLORS = {
-    "mono": "#2d8a4e",        # green for monophyletic
-    "non_mono": "#d63031",    # red for non-monophyletic
-    "unresolved": "#6c757d",  # gray for unresolved
-    "inexact": "#b8860b",     # amber for tips matched below species level
-    "support": "#8a8a8a",     # bootstrap/posterior values
-    "clade_band": "#fff3bf",  # band behind a selected clade
-    "chip_edge": "#dddddd",   # border of the clade-name chip
-    "tip": "#2c3e50",         # dark for tips
-    "branch": "#555555",      # branch lines
-    "bg": "#ffffff",          # canvas background
-    "highlight": "#ffeaa7",   # selection highlight
-    "header_bg": "#34495e",   # header background
-    "header_fg": "#ecf0f1",   # header text
-    "app_bg": "#2f2f2f",      # window background
-    "panel_bg": "#3a3a3a",    # frame background
-    "panel_edge": "#565656",  # frame border
-    "text": "#f1f1f1",        # primary text
-    "muted_text": "#d0d0d0",  # secondary text
-    "button_bg": "#f2f2f2",   # light buttons for contrast
-    "button_fg": "#1f1f1f",   # readable button text
-    "tab_bg": "#4a4a4a",      # notebook tab background
-    "tab_active": "#f2f2f2",  # selected tab background
-    "tab_active_fg": "#202020",
-    "field_bg": "#1f1f1f",    # list/text background
-    "field_fg": "#f5f5f5",
-    "info_icon": "#7fb3ff",   # the (i) affordance
-    "tooltip_bg": "#f7f7f2",  # hover popups read as paper, not as chrome
-    "tooltip_fg": "#1f1f1f",
+# ---- Colour themes ----
+# COLORS is mutated in place by apply_theme(), so every widget and drawing
+# routine keeps reading the same dict and picks up the change without being
+# handed a new one. Verified: nothing reads COLORS at import time.
+#
+# Every theme must define the same keys. The semantic ones - mono, non_mono,
+# unresolved, inexact - carry meaning, not decoration, so a theme may restyle
+# them but must keep them mutually distinguishable.
+
+THEMES = {}
+
+THEMES["Dark (default)"] = {
+    "conflict_dash": None,
+    "mono": "#2d8a4e", "non_mono": "#d63031", "unresolved": "#6c757d",
+    "inexact": "#b8860b", "support": "#8a8a8a", "clade_band": "#fff3bf",
+    "chip_edge": "#dddddd", "tip": "#2c3e50", "branch": "#555555",
+    "bg": "#ffffff", "highlight": "#ffeaa7",
+    "header_bg": "#34495e", "header_fg": "#ecf0f1",
+    "app_bg": "#2f2f2f", "panel_bg": "#3a3a3a", "panel_edge": "#565656",
+    "text": "#f1f1f1", "muted_text": "#d0d0d0",
+    "button_bg": "#f2f2f2", "button_fg": "#1f1f1f",
+    "tab_bg": "#4a4a4a", "tab_active": "#f2f2f2", "tab_active_fg": "#202020",
+    "field_bg": "#1f1f1f", "field_fg": "#f5f5f5",
+    "info_icon": "#7fb3ff", "tooltip_bg": "#f7f7f2", "tooltip_fg": "#1f1f1f",
 }
+
+THEMES["Light (cream)"] = {
+    "conflict_dash": None,
+    "mono": "#2f7d4f", "non_mono": "#c0392b", "unresolved": "#8d8577",
+    "inexact": "#a8761b", "support": "#9a9284", "clade_band": "#f6e7bd",
+    "chip_edge": "#d8cdb4", "tip": "#3b342a", "branch": "#7a7266",
+    "bg": "#fffdf6", "highlight": "#f2dfa4",
+    "header_bg": "#e8ddc4", "header_fg": "#3b342a",
+    "app_bg": "#f4ecd8", "panel_bg": "#efe5cd", "panel_edge": "#d6c9ab",
+    "text": "#3b342a", "muted_text": "#6f6657",
+    "button_bg": "#fffdf6", "button_fg": "#3b342a",
+    "tab_bg": "#e4d8ba", "tab_active": "#fffdf6", "tab_active_fg": "#3b342a",
+    "field_bg": "#fffdf6", "field_fg": "#3b342a",
+    "info_icon": "#1f6f8b", "tooltip_bg": "#fffdf6", "tooltip_fg": "#3b342a",
+}
+
+THEMES["Dark (warm brown)"] = {
+    "conflict_dash": None,
+    "mono": "#6a9a4a", "non_mono": "#d1603d", "unresolved": "#8a7c6d",
+    "inexact": "#c99a3c", "support": "#9c8c7a", "clade_band": "#5a4632",
+    "chip_edge": "#6b563f", "tip": "#f0e4d4", "branch": "#8a7562",
+    "bg": "#2b211a", "highlight": "#7a5c34",
+    "header_bg": "#3d2f24", "header_fg": "#f0e4d4",
+    "app_bg": "#2a211b", "panel_bg": "#352a22", "panel_edge": "#4d3d31",
+    "text": "#f0e4d4", "muted_text": "#c3b2a0",
+    "button_bg": "#e8d9c5", "button_fg": "#2a211b",
+    "tab_bg": "#41332a", "tab_active": "#e8d9c5", "tab_active_fg": "#2a211b",
+    "field_bg": "#1f1813", "field_fg": "#f0e4d4",
+    "info_icon": "#e0a860", "tooltip_bg": "#f4e9d8", "tooltip_fg": "#2a211b",
+}
+
+THEMES["Black and white"] = {
+    # No hue at all, so conflict cannot ride on red-vs-green. It rides on a
+    # dashed line plus weight instead: agreeing branches are mid-grey and
+    # solid, conflicting ones black and dashed. Both survive greyscale
+    # printing and photocopying, which colour never does.
+    "conflict_dash": (5, 3),
+    "mono": "#6e6e6e", "non_mono": "#000000", "unresolved": "#909090",
+    "inexact": "#606060", "support": "#707070", "clade_band": "#e6e6e6",
+    "chip_edge": "#000000", "tip": "#000000", "branch": "#000000",
+    "bg": "#ffffff", "highlight": "#d0d0d0",
+    "header_bg": "#000000", "header_fg": "#ffffff",
+    "app_bg": "#ffffff", "panel_bg": "#f2f2f2", "panel_edge": "#000000",
+    "text": "#000000", "muted_text": "#4a4a4a",
+    "button_bg": "#ffffff", "button_fg": "#000000",
+    "tab_bg": "#e0e0e0", "tab_active": "#000000", "tab_active_fg": "#ffffff",
+    "field_bg": "#ffffff", "field_fg": "#000000",
+    "info_icon": "#000000", "tooltip_bg": "#ffffff", "tooltip_fg": "#000000",
+}
+
+THEMES["Terminal green"] = {
+    "conflict_dash": None,
+    "mono": "#39ff14", "non_mono": "#ff4d4d", "unresolved": "#4f6f4f",
+    "inexact": "#d7ff5c", "support": "#4e8a4e", "clade_band": "#0d3f16",
+    "chip_edge": "#1f7a2e", "tip": "#9dff9d", "branch": "#2f8f3f",
+    "bg": "#04120a", "highlight": "#14572a",
+    "header_bg": "#0a2413", "header_fg": "#9dff9d",
+    "app_bg": "#05170c", "panel_bg": "#0a2413", "panel_edge": "#1f7a2e",
+    "text": "#9dff9d", "muted_text": "#5fbf6f",
+    "button_bg": "#0f3d1e", "button_fg": "#c6ffc6",
+    "tab_bg": "#0a2413", "tab_active": "#1f7a2e", "tab_active_fg": "#c6ffc6",
+    "field_bg": "#04120a", "field_fg": "#9dff9d",
+    "info_icon": "#39ff14", "tooltip_bg": "#0a2413", "tooltip_fg": "#9dff9d",
+}
+
+THEMES["Colour-blind safe"] = {
+    "conflict_dash": None,
+    # Conflict status normally rides on red vs green, which is exactly the
+    # pair deuteranopia and protanopia collapse - roughly 8% of men. Orange
+    # and blue stay distinct under every common form of colour blindness.
+    "mono": "#0072b2", "non_mono": "#d55e00", "unresolved": "#7a7a7a",
+    "inexact": "#cc79a7", "support": "#8a8a8a", "clade_band": "#ffe9c9",
+    "chip_edge": "#c8c8c8", "tip": "#1b2a38", "branch": "#5a5a5a",
+    "bg": "#ffffff", "highlight": "#f0e442",
+    "header_bg": "#1b2a38", "header_fg": "#ffffff",
+    "app_bg": "#eef1f4", "panel_bg": "#e2e7ec", "panel_edge": "#b4bec8",
+    "text": "#1b2a38", "muted_text": "#4f5b66",
+    "button_bg": "#ffffff", "button_fg": "#1b2a38",
+    "tab_bg": "#d5dce3", "tab_active": "#ffffff", "tab_active_fg": "#1b2a38",
+    "field_bg": "#ffffff", "field_fg": "#1b2a38",
+    "info_icon": "#0072b2", "tooltip_bg": "#ffffff", "tooltip_fg": "#1b2a38",
+}
+
+DEFAULT_THEME = "Dark (default)"
+
+# The live palette. Mutated, never rebound.
+COLORS = dict(THEMES[DEFAULT_THEME])
+
+
+def apply_theme(name):
+    """Swap the live palette in place. Returns the name actually applied."""
+    palette = THEMES.get(name)
+    if palette is None:
+        name, palette = DEFAULT_THEME, THEMES[DEFAULT_THEME]
+    COLORS.clear()
+    COLORS.update(palette)
+    return name
+
 
 
 def mousewheel_units(event):
@@ -235,6 +342,39 @@ class TextScaler:
                 state=tk.DISABLED if self.size >= self.sizes[-1] else tk.NORMAL)
 
 
+class LabelSpace:
+    """Tracks the rectangles labels already occupy, so they can avoid each other.
+
+    Bucketed into horizontal bands: a plain list means every new label scans
+    every placed one, which gets slow on a tree with hundreds of clades.
+    """
+
+    BAND = 24
+
+    def __init__(self):
+        self._bands = {}
+
+    @staticmethod
+    def pad(bbox, x=2, y=1):
+        x0, y0, x1, y1 = bbox
+        return (x0 - x, y0 - y, x1 + x, y1 + y)
+
+    def _bands_for(self, y0, y1):
+        return range(int(y0 // self.BAND), int(y1 // self.BAND) + 1)
+
+    def collides(self, rect):
+        x0, y0, x1, y1 = rect
+        for band in self._bands_for(y0, y1):
+            for a0, b0, a1, b1 in self._bands.get(band, ()):
+                if x0 < a1 and a0 < x1 and y0 < b1 and b0 < y1:
+                    return True
+        return False
+
+    def add(self, rect):
+        for band in self._bands_for(rect[1], rect[3]):
+            self._bands.setdefault(band, []).append(rect)
+
+
 class Tooltip:
     """Hover text for a widget.
 
@@ -292,10 +432,13 @@ class PhyLabelerApp:
         self.root.title("PhyLabeler - Phylogenetic Tree Labeler")
         self.root.geometry("1200x800")
         self.root.minsize(900, 600)
-        self._configure_styles()
 
         # State
         self.db = TaxonomyDB()
+        self.theme_name = apply_theme(
+            self._load_settings().get("theme", DEFAULT_THEME))
+        self.theme_var = tk.StringVar(value=self.theme_name)
+        self._configure_styles()
         self.current_tree = None
         self.results = None
         self.unresolved_tips = []
@@ -309,6 +452,10 @@ class PhyLabelerApp:
         self.highlight_intruders = set()  # Tips that break the selected group
         self._temp_dirs = []        # Scratch dirs for archive extraction
         self._redraw_job = None     # Pending debounced canvas redraw
+        self._hidden_labels = 0     # Clade chips omitted for lack of room
+        self.tree_expanded = False  # Tree pane given the whole column
+        self._results_sash = None   # Sash position to restore
+        self._fullscreen = False
         self._busy = False          # An analysis is running
         # Keyed by (widget name, row id): Treeview row ids are only unique
         # within one widget, so every table hands out I001, I002, ... and a
@@ -345,6 +492,61 @@ class PhyLabelerApp:
             shutil.rmtree(path, ignore_errors=True)
         self._temp_dirs.clear()
         self.root.destroy()
+
+    def _set_theme(self, name):
+        """Switch palette at runtime and repaint everything that caches one.
+
+        ttk styles are re-declared wholesale; the plain-Tk widgets (canvas,
+        listbox, text) bake their colours in at creation, so they are walked
+        and re-applied rather than rebuilt.
+        """
+        self.theme_name = apply_theme(name)
+        self.theme_var.set(self.theme_name)
+        self._configure_styles()
+        self._restyle_widgets(self.root)
+        self.results_scaler.apply()      # re-asserts the table style
+        self._draw_now()
+        self._save_settings()
+
+    def _restyle_widgets(self, widget):
+        """Re-apply the palette to every plain-Tk widget beneath `widget`."""
+        for child in widget.winfo_children():
+            if isinstance(child, scrolledtext.ScrolledText) or \
+                    isinstance(child, tk.Text):
+                self._style_text_widget(child)
+            elif isinstance(child, tk.Listbox):
+                child.configure(
+                    bg=COLORS["field_bg"], fg=COLORS["field_fg"],
+                    selectbackground=COLORS["highlight"],
+                    selectforeground=COLORS["button_fg"],
+                    highlightbackground=COLORS["panel_edge"],
+                    highlightcolor=COLORS["panel_edge"])
+            elif isinstance(child, tk.Canvas):
+                child.configure(bg=COLORS["bg"])
+            elif isinstance(child, tk.Toplevel):
+                child.configure(bg=COLORS["app_bg"])
+            self._restyle_widgets(child)
+
+    # ---- Settings ----
+
+    def _settings_path(self):
+        return os.path.join(self.db.cache_dir, "settings.json")
+
+    def _load_settings(self):
+        """Remember the theme between runs; a colour choice is not a per-run
+        decision and re-picking it every launch would be tedious."""
+        try:
+            with open(self._settings_path(), encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, ValueError):
+            return {}
+
+    def _save_settings(self):
+        try:
+            with open(self._settings_path(), "w", encoding="utf-8") as handle:
+                json.dump({"theme": self.theme_name}, handle)
+        except OSError:
+            pass          # a read-only cache dir is not worth an error dialog
 
     def _configure_styles(self):
         """Configure a consistent ttk theme so controls render correctly."""
@@ -555,6 +757,23 @@ class PhyLabelerApp:
         db_menu.add_command(label="Cache Info...", command=self._show_cache_info)
         menubar.add_cascade(label="Taxonomy DB", menu=db_menu)
 
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_command(label="Fit Tree to Window",
+                              command=self._zoom_to_fit)
+        view_menu.add_command(label="Expand Tree Panel",
+                              command=self._toggle_tree_expanded)
+        view_menu.add_separator()
+        theme_menu = tk.Menu(view_menu, tearoff=0)
+        for name in THEMES:
+            theme_menu.add_radiobutton(
+                label=name, value=name, variable=self.theme_var,
+                command=lambda n=name: self._set_theme(n))
+        view_menu.add_cascade(label="Colour Theme", menu=theme_menu)
+        view_menu.add_separator()
+        view_menu.add_command(label="Full Screen", accelerator="F11",
+                              command=self._toggle_fullscreen)
+        menubar.add_cascade(label="View", menu=view_menu)
+
         help_menu = tk.Menu(menubar, tearoff=0)
         for title, _body in HELP_SECTIONS:
             help_menu.add_command(
@@ -569,6 +788,9 @@ class PhyLabelerApp:
         self.root.bind("<Control-o>", lambda e: self._open_tree())
         self.root.bind("<Control-q>", lambda e: self._on_close())
         self.root.bind("<F1>", lambda e: self._show_help())
+        self.root.bind("<F11>", self._toggle_fullscreen)
+        self.root.bind("<Escape>", lambda e: (self._fullscreen
+                                              and self._toggle_fullscreen()))
 
         # Main layout: left panel + right panel
         main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
@@ -687,6 +909,7 @@ class PhyLabelerApp:
 
         right_pane = ttk.PanedWindow(right_frame, orient=tk.VERTICAL)
         right_pane.pack(fill=tk.BOTH, expand=True)
+        self.right_pane = right_pane
 
         # Tree visualization
         tree_view_frame = self._panel(right_pane, "Tree Visualization",
@@ -713,28 +936,67 @@ class PhyLabelerApp:
         canvas_frame.grid_columnconfigure(0, weight=1)
 
         # Zoom controls
+        # Discrete steps rather than a slider. A slider fires once per pixel
+        # of drag, and debouncing that meant the tree did not move until the
+        # drag stopped - which reads as lag. One click, one redraw.
         zoom_frame = ttk.Frame(tree_view_frame)
         zoom_frame.pack(fill=tk.X, padx=5, pady=2)
-        self.zoom_var = tk.DoubleVar(value=1.0)
+        self.zoom_var = tk.DoubleVar(value=ZOOM_DEFAULT)
         ttk.Label(zoom_frame, text="Zoom:").pack(side=tk.LEFT)
-        ttk.Scale(zoom_frame, from_=0.2, to=3.0, variable=self.zoom_var,
-                  orient=tk.HORIZONTAL, command=lambda _: self._redraw_tree()
-                  ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.zoom_out_button = ttk.Button(
+            zoom_frame, text="−", width=3, style="App.TButton",
+            command=lambda: self._step_zoom(-1))
+        self.zoom_out_button.pack(side=tk.LEFT, padx=(6, 2))
+        self.zoom_in_button = ttk.Button(
+            zoom_frame, text="+", width=3, style="App.TButton",
+            command=lambda: self._step_zoom(1))
+        self.zoom_in_button.pack(side=tk.LEFT, padx=2)
+        ttk.Button(zoom_frame, text="Reset", style="App.TButton",
+                   command=self._reset_zoom).pack(side=tk.LEFT, padx=(6, 2))
+        ttk.Button(zoom_frame, text="Fit", style="App.TButton",
+                   command=self._zoom_to_fit).pack(side=tk.LEFT, padx=2)
+        self.zoom_label = ttk.Label(zoom_frame, text="100%", width=6)
+        self.zoom_label.pack(side=tk.LEFT, padx=(6, 0))
+        self.expand_button = ttk.Button(
+            zoom_frame, text="Expand ⤢", style="App.TButton",
+            command=self._toggle_tree_expanded)
+        self.expand_button.pack(side=tk.LEFT, padx=(10, 2))
 
-        self.show_branch_lengths_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(zoom_frame, text="Branch lengths",
-                         variable=self.show_branch_lengths_var,
-                         command=self._redraw_tree).pack(side=tk.RIGHT)
-
-        self.show_support_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(zoom_frame, text="Support",
-                         variable=self.show_support_var,
-                         command=self._redraw_tree).pack(side=tk.RIGHT)
+        # Display toggles get their own row. Sharing one with the zoom
+        # controls meant the row overflowed once Fit and Expand were added,
+        # and "Labels" was silently clipped off the right edge - which looks
+        # exactly like the labels feature being broken.
+        display_frame = ttk.Frame(tree_view_frame)
+        display_frame.pack(fill=tk.X, padx=5, pady=(0, 3))
+        ttk.Label(display_frame, text="Show:").pack(side=tk.LEFT)
 
         self.show_labels_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(zoom_frame, text="Labels",
-                         variable=self.show_labels_var,
-                         command=self._redraw_tree).pack(side=tk.RIGHT)
+        ttk.Checkbutton(display_frame, text="Labels",
+                        variable=self.show_labels_var,
+                        command=self._redraw_tree).pack(side=tk.LEFT, padx=6)
+
+        self.show_support_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(display_frame, text="Support",
+                        variable=self.show_support_var,
+                        command=self._redraw_tree).pack(side=tk.LEFT, padx=6)
+
+        self.show_branch_lengths_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(display_frame, text="Branch lengths",
+                        variable=self.show_branch_lengths_var,
+                        command=self._redraw_tree).pack(side=tk.LEFT, padx=6)
+
+        ttk.Label(display_frame, text="  View:").pack(side=tk.LEFT,
+                                                     padx=(12, 0))
+        self.view_mode_var = tk.StringVar(value="Rectangular")
+        view_box = ttk.Combobox(
+            display_frame, textvariable=self.view_mode_var, state="readonly",
+            width=12, values=["Rectangular", "Circular"])
+        view_box.pack(side=tk.LEFT, padx=4)
+        view_box.bind("<<ComboboxSelected>>", lambda e: self._draw_now())
+
+        self.label_note = ttk.Label(display_frame, text="",
+                                    foreground=COLORS["muted_text"])
+        self.label_note.pack(side=tk.RIGHT)
 
         # Results panel
         results_frame = self._panel(right_pane, "Results", "results")
@@ -771,7 +1033,7 @@ class PhyLabelerApp:
             columns=[("name", "Group", 200), ("rank", "Rank", 120),
                      ("members", "Members", 70),
                      ("cost", "Tips to move", 90), ("type", "Conflict", 80),
-                     ("culprit", "One tip explains it", 175),
+                     ("culprit", "One tip explains it", 230),
                      ("intruders", "Intruders", 70), ("outliers", "Outliers", 70),
                      ("tips", "Intruding tips", 380)],
             expandable=True,
@@ -820,6 +1082,7 @@ class PhyLabelerApp:
         self._bind_scroll_wheels()
         self.results_scaler.bind_keys(self.root)
         self.results_scaler.apply()
+        self._update_zoom_controls()
 
     def _panel(self, parent, title, help_key):
         """A LabelFrame whose title carries a hoverable (i).
@@ -1238,9 +1501,196 @@ class PhyLabelerApp:
                 y_of[id(node)] = (min(ys) + max(ys)) / 2.0
 
         positions = {key: (x_of[key], y_of[key]) for key in x_of}
-        width = max(x for x, _ in positions.values()) + LABEL_GUTTER * zoom
+        # Size the right-hand gutter to the longest tip name actually drawn.
+        # A flat 320*zoom reserved ~900px of empty canvas at high zoom, which
+        # is pure scrolling distance for no content.
+        font_size = max(6, int(9 * zoom))
+        metrics = tkfont.Font(family="Helvetica", size=font_size)
+        longest = max((metrics.measure(tip.label) for tip in tips), default=0)
+        width = (max(x for x, _ in positions.values())
+                 + longest + LABEL_GUTTER_PAD)
         height = MARGIN_TOP + max(1, len(tips)) * tip_spacing + MARGIN_TOP
         return positions, width, height
+
+    def _layout_circular(self, zoom):
+        """Polar layout: tips fanned around a circle, depth as radius.
+
+        Worth having for its own sake, but it also answers the large-tree
+        problem directly - a circle puts n tips around a circumference rather
+        than down a column, so a tree that needs 10,000px of vertical
+        scrolling as a phylogram fits on one screen as a fan.
+
+        A wedge is left open so the root is visible and the reading order is
+        obvious, which is why the sweep is not a full turn.
+        """
+        tips = self.current_tree.get_tip_nodes()
+        count = max(1, len(tips))
+
+        depth_of, dist_of = {}, {}
+        for node in self.current_tree.pre_order():
+            if node.parent is None:
+                depth_of[id(node)] = 0
+                dist_of[id(node)] = 0.0
+            else:
+                depth_of[id(node)] = depth_of[id(node.parent)] + 1
+                try:
+                    length = float(node.branch_length or 0.0)
+                except (TypeError, ValueError):
+                    length = 0.0
+                dist_of[id(node)] = dist_of[id(node.parent)] + max(0.0, length)
+
+        max_depth = max(depth_of.values()) or 1
+        max_dist = max(dist_of.values()) or 1.0
+        use_lengths = self.show_branch_lengths_var.get()
+        outer = CIRCLE_RADIUS * zoom
+
+        radius_of = {}
+        for key in depth_of:
+            fraction = (dist_of[key] / max_dist if use_lengths
+                        else depth_of[key] / max_depth)
+            radius_of[key] = CIRCLE_INNER + fraction * (outer - CIRCLE_INNER)
+
+        angle_of = {}
+        step = CIRCLE_SWEEP / count
+        for index, tip in enumerate(tips):
+            angle_of[id(tip)] = CIRCLE_START + index * step
+        for node in self.current_tree.post_order():
+            if node.children:
+                angles = [angle_of[id(child)] for child in node.children]
+                angle_of[id(node)] = (min(angles) + max(angles)) / 2.0
+
+        # Room for the tip names, which radiate outward.
+        font_size = max(6, int(9 * zoom))
+        metrics = tkfont.Font(family="Helvetica", size=font_size)
+        longest = max((metrics.measure(tip.label) for tip in tips), default=0)
+        margin = outer + longest + 30
+        centre = (margin, margin)
+
+        positions = {}
+        for key, radius in radius_of.items():
+            radians = math.radians(angle_of[key])
+            positions[key] = (centre[0] + radius * math.cos(radians),
+                              centre[1] - radius * math.sin(radians))
+        return positions, angle_of, radius_of, centre, margin * 2
+
+    def _draw_circular(self, canvas, zoom, space):
+        """Render the polar layout: an arc per node, a spoke per child."""
+        positions, angle_of, radius_of, centre, size = self._layout_circular(zoom)
+        cx, cy = centre
+        highlight = self.highlight_tips
+        line_width = max(0.7, 1.2 * zoom)
+
+        for node in self.current_tree.pre_order():
+            if not node.children:
+                continue
+            radius = radius_of[id(node)]
+            angles = [angle_of[id(child)] for child in node.children]
+            low, high = min(angles), max(angles)
+            colour = self._branch_color(node)
+            if high > low:
+                canvas.create_arc(
+                    cx - radius, cy - radius, cx + radius, cy + radius,
+                    start=low, extent=high - low, style=tk.ARC,
+                    outline=colour, width=line_width,
+                    **self._branch_dash(node))
+            for child in node.children:
+                theta = math.radians(angle_of[id(child)])
+                child_radius = radius_of[id(child)]
+                emphasis = highlight and child.label in highlight
+                canvas.create_line(
+                    cx + radius * math.cos(theta),
+                    cy - radius * math.sin(theta),
+                    cx + child_radius * math.cos(theta),
+                    cy - child_radius * math.sin(theta),
+                    fill=self._branch_color(child),
+                    width=(2.4 if emphasis else 1.0) * max(0.7, zoom),
+                    **self._branch_dash(child))
+
+        if not self.show_labels_var.get():
+            self.label_note.configure(text="labels off")
+            self._hidden_labels = 0
+            canvas.configure(scrollregion=(0, 0, size, size))
+            return
+
+        font_size = max(6, int(9 * zoom))
+        tips = self.current_tree.get_tip_nodes()
+        spacing = (2 * math.pi * CIRCLE_RADIUS * zoom
+                   * (CIRCLE_SWEEP / 360.0) / max(1, len(tips)))
+        room = spacing >= 7
+        if room:
+            for tip in tips:
+                angle = angle_of[id(tip)]
+                theta = math.radians(angle)
+                radius = radius_of[id(tip)] + 6
+                match = self.tip_matches.get(tip.label)
+                if tip.label in self.highlight_intruders:
+                    colour, weight = COLORS["non_mono"], "bold"
+                elif match is None:
+                    colour, weight = COLORS["unresolved"], "normal"
+                elif not match.is_exact:
+                    colour, weight = COLORS["inexact"], "normal"
+                else:
+                    colour, weight = COLORS["tip"], "normal"
+                # Flip the text on the left half so no name reads upside down.
+                flipped = 90 < (angle % 360) < 270
+                item = canvas.create_text(
+                    cx + radius * math.cos(theta),
+                    cy - radius * math.sin(theta),
+                    text=tip.label, anchor="e" if flipped else "w",
+                    angle=(angle + 180) % 360 if flipped else angle % 360,
+                    fill=colour, font=("Helvetica", font_size, weight))
+                # Deliberately not reserved. Tk reports the axis-aligned box
+                # of rotated text, which is far larger than the glyphs and,
+                # around a circle, overlaps its neighbours even when the
+                # names visibly do not. Reserving those boxes starved the
+                # clade names of anywhere to sit.
+
+        # Precomputed in one pass: calling count_tips() per node inside a
+        # sort key is O(tips) each time and turns this into a quadratic.
+        tip_counts = {}
+        for node in self.current_tree.post_order():
+            tip_counts[id(node)] = (1 if node.is_tip else
+                                    sum(tip_counts[id(c)]
+                                        for c in node.children))
+
+        hidden = 0
+        labelled = sorted((n for n in self.current_tree.pre_order()
+                           if not n.is_tip and n.label),
+                          key=lambda n: -tip_counts[id(n)])
+        for node in labelled:
+            # Push the name a little outward along its own spoke. Internal
+            # nodes bunch up near the centre, so placing labels exactly on
+            # the node loses most of them to collisions.
+            theta = math.radians(angle_of[id(node)])
+            radius = radius_of[id(node)] + CIRCLE_LABEL_OFFSET
+            x = cx + radius * math.cos(theta)
+            y = cy - radius * math.sin(theta)
+            colour = self._branch_color(node)
+            if colour == COLORS["branch"]:
+                colour = COLORS["unresolved"]
+            item = canvas.create_text(
+                x, y, text=node.label, anchor="center", fill=colour,
+                font=("Helvetica", max(9, font_size - 1), "bold"))
+            rect = space.pad(canvas.bbox(item))
+            if space.collides(rect):
+                canvas.delete(item)
+                hidden += 1
+                continue
+            chip = canvas.create_rectangle(
+                *rect, fill=COLORS["bg"], outline=COLORS["chip_edge"])
+            canvas.tag_lower(chip, item)
+            space.add(rect)
+
+        self._hidden_labels = hidden
+        self._describe_hidden_labels(hidden, room, spacing)
+        canvas.configure(scrollregion=(0, 0, size, size))
+
+    def _branch_dash(self, node):
+        """Dash pattern for a branch, when the theme encodes status without hue."""
+        pattern = COLORS.get("conflict_dash")
+        if pattern and node.monophyly_status == "not_monophyletic":
+            return {"dash": pattern}
+        return {}
 
     def _branch_color(self, node):
         """Colour a branch by the monophyly status of the clade below it."""
@@ -1260,11 +1710,20 @@ class PhyLabelerApp:
             return
 
         zoom = self.zoom_var.get()
+        if self.view_mode_var.get() == "Circular":
+            self._draw_circular(canvas, zoom, LabelSpace())
+            return
+
         positions, width, height = self._layout_tree(zoom)
         tip_spacing = max(4.0, TIP_SPACING * zoom)
         show_labels = self.show_labels_var.get()
         font_size = max(6, int(9 * zoom))
-        # Below this the text is unreadable and just paints the canvas solid.
+        # Clade names keep a legible size however far out you zoom - they are
+        # the summary you zoom out in order to read. Only their number is
+        # thinned, by the collision pass below.
+        clade_font_size = max(9, font_size - 1)
+        # Tip names are different: below this they physically cannot fit
+        # between adjacent tips, and drawing them just paints the canvas solid.
         room_for_tip_labels = show_labels and tip_spacing >= 7
 
         highlight = self.highlight_tips
@@ -1290,8 +1749,17 @@ class PhyLabelerApp:
                 color = self._branch_color(child)
                 emphasis = highlight and child.label in highlight
                 line_width = (2.6 if emphasis else 1.5) * max(0.6, zoom)
-                canvas.create_line(x, y, x, cy, fill=color, width=line_width)
-                canvas.create_line(x, cy, cx, cy, fill=color, width=line_width)
+                style = self._branch_dash(child)
+                canvas.create_line(x, y, x, cy, fill=color,
+                                   width=line_width, **style)
+                canvas.create_line(x, cy, cx, cy, fill=color,
+                                   width=line_width, **style)
+
+        # Everything textual is placed through here so labels stop landing on
+        # top of one another. Order is by priority: tip names are the data and
+        # always win, support values are pinned to a branch and cannot move,
+        # clade chips are free to shift and so give way.
+        space = LabelSpace()
 
         # Tip labels.
         if room_for_tip_labels:
@@ -1306,11 +1774,14 @@ class PhyLabelerApp:
                     color, weight = COLORS["inexact"], "normal"
                 else:
                     color, weight = COLORS["tip"], "normal"
-                canvas.create_text(
+                item = canvas.create_text(
                     x + 6, y, text=tip.label, anchor="w", fill=color,
                     font=("Helvetica", font_size, weight))
+                space.add(space.pad(canvas.bbox(item)))
 
         if not show_labels:
+            self._hidden_labels = 0
+            self.label_note.configure(text="labels off")
             canvas.configure(scrollregion=(0, 0, width, height))
             return
 
@@ -1320,40 +1791,221 @@ class PhyLabelerApp:
                 if node.is_tip or not node.support:
                     continue
                 x, y = positions[id(node)]
-                canvas.create_text(
+                item = canvas.create_text(
                     x - 3, y - 6 * max(0.7, zoom), text=str(node.support),
                     anchor="e", fill=COLORS["support"],
                     font=("Helvetica", max(6, font_size - 2)))
+                rect = space.pad(canvas.bbox(item), x=1, y=0)
+                if space.collides(rect):
+                    canvas.delete(item)   # crowded branch; the value is noise
+                else:
+                    space.add(rect)
 
         # Clade names, drawn to the RIGHT of the node on an opaque chip.
         # Drawing them to the left clipped every shallow clade off the canvas.
-        for node in self.current_tree.pre_order():
-            if node.is_tip or not node.label:
-                continue
+        #
+        # Biggest clades are placed first, so when two nested groups compete
+        # for the same spot the more inclusive one keeps it. A chip that
+        # cannot sit on its node is nudged vertically and gets a leader line;
+        # if nothing fits it is dropped rather than drawn over its neighbour.
+        tip_counts = {}
+        for node in self.current_tree.post_order():
+            tip_counts[id(node)] = (1 if node.is_tip else
+                                    sum(tip_counts[id(c)]
+                                        for c in node.children))
+
+        labelled = [n for n in self.current_tree.pre_order()
+                    if not n.is_tip and n.label]
+        labelled.sort(key=lambda n: -tip_counts[id(n)])
+
+        step = max(5.0, tip_spacing * 0.55)
+        offsets = [0.0]
+        for multiple in (1, 2, 3, 4):
+            offsets.extend((-step * multiple, step * multiple))
+
+        hidden = 0
+        for node in labelled:
             x, y = positions[id(node)]
             color = self._branch_color(node)
             if color == COLORS["branch"]:
                 color = COLORS["unresolved"]
-            text_id = canvas.create_text(
-                x + 5, y, text=node.label, anchor="w", fill=color,
-                font=("Helvetica", max(6, font_size - 1), "bold"))
-            x0, y0, x1, y1 = canvas.bbox(text_id)
-            chip = canvas.create_rectangle(
-                x0 - 2, y0 - 1, x1 + 2, y1 + 1,
-                fill=COLORS["bg"], outline=COLORS["chip_edge"])
-            canvas.tag_lower(chip, text_id)
 
+            item = canvas.create_text(
+                x + 5, y, text=node.label, anchor="w", fill=color,
+                font=("Helvetica", clade_font_size, "bold"))
+            rect = space.pad(canvas.bbox(item))
+
+            shift = next(
+                (dy for dy in offsets
+                 if not space.collides((rect[0], rect[1] + dy,
+                                        rect[2], rect[3] + dy))),
+                None)
+            if shift is None:
+                canvas.delete(item)
+                hidden += 1
+                continue
+
+            if shift:
+                canvas.move(item, 0, shift)
+                rect = (rect[0], rect[1] + shift, rect[2], rect[3] + shift)
+                canvas.create_line(
+                    x, y, rect[0], (rect[1] + rect[3]) / 2,
+                    fill=COLORS["chip_edge"], width=1)
+
+            chip = canvas.create_rectangle(
+                *rect, fill=COLORS["bg"], outline=COLORS["chip_edge"])
+            canvas.tag_lower(chip, item)
+            space.add(rect)
+
+        self._hidden_labels = hidden
+        self._describe_hidden_labels(hidden, room_for_tip_labels, tip_spacing)
         canvas.configure(scrollregion=(0, 0, width, height))
 
+    # ---- Zoom ----
+
+    def _step_zoom(self, direction):
+        """Move one stop along the zoom ladder, keeping the view centred."""
+        current = self.zoom_var.get()
+        index = min(range(len(ZOOM_LEVELS)),
+                    key=lambda i: abs(ZOOM_LEVELS[i] - current))
+        target = ZOOM_LEVELS[max(0, min(len(ZOOM_LEVELS) - 1,
+                                        index + direction))]
+        self._apply_zoom(target)
+
+    def _reset_zoom(self):
+        self._apply_zoom(ZOOM_DEFAULT)
+
+    def _fit_zoom_for(self, tip_count):
+        """Largest zoom stop at which `tip_count` tips fit the viewport.
+
+        Tip spacing scales linearly with zoom, so this is arithmetic rather
+        than a trial layout.
+        """
+        if tip_count <= 0:
+            return ZOOM_DEFAULT
+        viewport = self.tree_canvas.winfo_height() or 420
+        usable = max(120, viewport - 2 * MARGIN_TOP)
+        ideal = usable / (tip_count * TIP_SPACING)
+        fitting = [level for level in ZOOM_LEVELS if level <= ideal]
+        return fitting[-1] if fitting else ZOOM_LEVELS[0]
+
+    def _zoom_to_fit(self):
+        """Zoom so the whole tree is visible, or as close as the range allows."""
+        if not self.current_tree:
+            return
+        tips = self.current_tree.count_tips()
+        self._apply_zoom(self._fit_zoom_for(tips))
+        self.tree_canvas.yview_moveto(0.0)
+        self.tree_canvas.xview_moveto(0.0)
+        self.tree_canvas.update_idletasks()
+
+        needed = tips * TIP_SPACING * self.zoom_var.get()
+        viewport = self.tree_canvas.winfo_height() or 1
+        if needed > viewport:
+            # Honest about it rather than silently leaving them scrolled.
+            self._update_status(
+                f"{tips} tips will not fit even at "
+                f"{self.zoom_var.get() * 100:.0f}% - use Expand for a taller "
+                f"panel, or scroll")
+        else:
+            self._update_status(f"Fitted {_plural(tips, 'tip')} in view")
+
+    def _toggle_tree_expanded(self):
+        """Give the tree the whole right-hand column, or share it again.
+
+        The panes have always been draggable, but a sash is not a control
+        anyone finds. This makes "let me actually look at the tree" a button.
+        """
+        self.tree_expanded = not self.tree_expanded
+        try:
+            if self.tree_expanded:
+                self._results_sash = self.right_pane.sashpos(0)
+                self.right_pane.sashpos(0, self.right_pane.winfo_height() - 60)
+                self.expand_button.configure(text="Restore ⤡")
+            else:
+                self.right_pane.sashpos(0, self._results_sash or 420)
+                self.expand_button.configure(text="Expand ⤢")
+        except tk.TclError:
+            pass
+        self._redraw_tree()
+
+    def _toggle_fullscreen(self, _event=None):
+        self._fullscreen = not getattr(self, "_fullscreen", False)
+        try:
+            self.root.attributes("-fullscreen", self._fullscreen)
+        except tk.TclError:
+            # Not every window manager supports it; fall back to zoomed.
+            try:
+                self.root.state("zoomed" if self._fullscreen else "normal")
+            except tk.TclError:
+                pass
+        return "break"
+
+    def _apply_zoom(self, level):
+        if level == self.zoom_var.get():
+            return
+        # Hold the middle of the viewport still, so zooming does not throw
+        # the user to a different part of a 3000px-tall tree.
+        try:
+            top, bottom = self.tree_canvas.yview()
+            anchor = (top + bottom) / 2
+        except (tk.TclError, ValueError):
+            anchor = None
+
+        self.zoom_var.set(level)
+        self._draw_now()
+
+        if anchor is not None:
+            view = self.tree_canvas.yview()
+            self.tree_canvas.yview_moveto(
+                max(0.0, anchor - (view[1] - view[0]) / 2))
+
+    def _zoom_by_wheel(self, event):
+        """Ctrl/Cmd + wheel over the canvas zooms; the bare wheel scrolls."""
+        step = mousewheel_units(event)
+        if step:
+            self._step_zoom(-step)
+        return "break"
+
+    def _describe_hidden_labels(self, hidden, tips_drawn, tip_spacing):
+        """Say what is not being shown, and why, next to the toggles."""
+        notes = []
+        if not tips_drawn:
+            notes.append("tip names need more zoom")
+        if hidden:
+            notes.append(f"{_plural(hidden, 'clade name')} hidden")
+        self.label_note.configure(text="  ·  ".join(notes))
+
     def _redraw_tree(self):
-        """Coalesce rapid redraws (the zoom slider fires per pixel)."""
+        """Coalesce rapid redraws from the display checkboxes."""
         if self._redraw_job is not None:
             self.root.after_cancel(self._redraw_job)
-        self._redraw_job = self.root.after(60, self._do_redraw)
+        self._redraw_job = self.root.after(40, self._do_redraw)
+
+    def _draw_now(self):
+        """Redraw immediately, cancelling anything already scheduled."""
+        if self._redraw_job is not None:
+            self.root.after_cancel(self._redraw_job)
+        self._do_redraw()
 
     def _do_redraw(self):
         self._redraw_job = None
         self._draw_tree()
+        self._update_zoom_controls()
+
+    def _update_zoom_controls(self):
+        level = self.zoom_var.get()
+        self.zoom_label.configure(text=f"{level * 100:.0f}%")
+        self.zoom_out_button.configure(
+            state=tk.DISABLED if level <= ZOOM_LEVELS[0] else tk.NORMAL)
+        self.zoom_in_button.configure(
+            state=tk.DISABLED if level >= ZOOM_LEVELS[-1] else tk.NORMAL)
+        # Say so when labels had to be dropped, rather than leaving the user
+        # wondering why a clade they can see has no name on it.
+        if self._hidden_labels:
+            self._update_status(
+                f"{_plural(self._hidden_labels, 'clade label')} hidden for "
+                f"lack of room - zoom in to see them")
 
     def _scroll_canvas_to(self, y_center, height):
         """Scroll the tree canvas so a given y is roughly centred."""
@@ -1375,6 +2027,13 @@ class PhyLabelerApp:
             messagebox.showwarning("No Tree", "Load a tree file first.")
             return
 
+        # Read the selection HERE, on the main thread. Tk widgets are not
+        # thread-safe and querying one from the worker is undefined behaviour
+        # that happens to work most of the time.
+        selection = self.tree_listbox.curselection()
+        selected_name = (os.path.basename(self.tree_files[selection[0]])
+                         if selection else None)
+
         def analyze():
             checker = MonophylyChecker(self.db)
             analysis = checker.analyze(
@@ -1382,11 +2041,8 @@ class PhyLabelerApp:
             checker.label_tree(self.current_tree, analysis["node_results"])
             self._apply_analysis(analysis)
 
-            # Store for batch results
-            sel = self.tree_listbox.curselection()
-            if sel:
-                basename = os.path.basename(self.tree_files[sel[0]])
-                self.batch_results[basename] = analysis
+            if selected_name:
+                self.batch_results[selected_name] = analysis
 
             self.root.after(0, self._show_results)
             self.root.after(0, self._draw_tree)
@@ -1414,6 +2070,9 @@ class PhyLabelerApp:
             messagebox.showwarning("No Trees", "Load tree files first.")
             return
 
+        selection = self.tree_listbox.curselection()
+        selected_path = self.tree_files[selection[0]] if selection else None
+
         def analyze_batch():
             checker = MonophylyChecker(self.db)
             total = len(self.tree_files)
@@ -1432,11 +2091,10 @@ class PhyLabelerApp:
             self._update_status(
                 f"Batch analysis complete: {len(self.batch_results)} trees")
 
-            # Refresh current view
-            sel = self.tree_listbox.curselection()
-            if sel:
-                self.root.after(0, lambda: self._load_tree(
-                    self.tree_files[sel[0]]))
+            # Refresh current view, using the path captured before the
+            # worker started rather than querying the listbox from here.
+            if selected_path:
+                self.root.after(0, lambda: self._load_tree(selected_path))
 
         self._run_threaded(analyze_batch, "Running batch analysis...")
 
@@ -1502,7 +2160,7 @@ class PhyLabelerApp:
             row = self.nonmono_tree.insert("", tk.END, values=(
                 group.name, group.rank, group.member_count,
                 group.conflict_cost, group.conflict_type,
-                group.culprit or "", len(group.intruders),
+                group.culprit_summary(), len(group.intruders),
                 len(group.outliers), listed))
             self._remember_row(self.nonmono_tree, row, group)
             self._add_constituent_rows(self.nonmono_tree, row, group, 9)
@@ -1638,13 +2296,40 @@ class PhyLabelerApp:
                            f"{_plural(len(entry.outliers), 'outlier')}"
                            f" - move {_plural(entry.conflict_cost, 'tip')} "
                            f"({entry.conflict_type})")
+                # Say plainly when the named tip is a choice, not the answer.
+                if entry.is_ambiguous:
+                    status += ("  |  any ONE of these repairs it: "
+                               + ", ".join(entry.repair_options))
 
         self._draw_tree()
-        self._scroll_to_highlight()
+        if isinstance(entry, ConflictingTip):
+            self._scroll_to_highlight()
+        else:
+            self._frame_highlight()
         self._update_status(status)
 
+    def _frame_highlight(self):
+        """Bring the highlighted clade into view, zooming out if it will not fit.
+
+        Selecting a 26-member group at 280% used to drop the user inside the
+        clade: the highlight band filled the viewport and there was nothing to
+        see. Zoom is only ever reduced here, never raised, so an explicit zoom
+        choice is respected - use the Fit button to go the other way.
+        """
+        if not self.highlight_tips or not self.current_tree:
+            return
+        fitting = self._fit_zoom_for(len(self.highlight_tips))
+        if fitting < self.zoom_var.get():
+            self._apply_zoom(fitting)
+
+        positions, _width, height = self._layout_tree(self.zoom_var.get())
+        ys = [positions[id(n)][1] for n in self.current_tree.get_tip_nodes()
+              if n.label in self.highlight_tips]
+        if ys:
+            self._scroll_canvas_to((min(ys) + max(ys)) / 2, height)
+
+    # Kept for the tip search, which frames a single tip and must not rezoom.
     def _scroll_to_highlight(self):
-        """Centre the canvas on whatever is currently highlighted."""
         positions, _width, height = self._layout_tree(self.zoom_var.get())
         ys = [positions[id(n)][1] for n in self.current_tree.get_tip_nodes()
               if n.label in self.highlight_tips]
@@ -1778,6 +2463,8 @@ class PhyLabelerApp:
         """Attach mouse wheel scrolling to all scrollable panels."""
         self._bind_mousewheel(self.tree_listbox, yview=True)
         self._bind_mousewheel(self.tree_canvas, yview=True, xview=True)
+        for seq in ("<Control-MouseWheel>", "<Command-MouseWheel>"):
+            self.tree_canvas.bind(seq, self._zoom_by_wheel, add="+")
         self._bind_mousewheel(self.summary_text, yview=True)
         self._bind_mousewheel(self.nonmono_tree, yview=True)
         self._bind_mousewheel(self.mono_tree, yview=True)

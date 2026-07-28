@@ -255,6 +255,111 @@ class Node:
         return f"Node(label={self.label}, tips={self.count_tips()})"
 
 
+def copy_tree(root):
+    """An independent copy of a tree: topology, labels, lengths, support.
+
+    Iterative, like every other traversal here, so a ladder-shaped tree of any
+    depth is safe. `copy.deepcopy` is not an option: it recurses through the
+    parent back-references and dies on deep trees.
+
+    Analysis results (`monophyly_status`, `taxonomy_code`, `taxonomy_name`)
+    are deliberately NOT copied. They describe the original topology, and
+    carrying them into a pruned copy would paint stale colours on clades that
+    no longer exist. Absent means "not yet analysed", which is true.
+    """
+    clone = Node(root.label, root.branch_length, root.is_tip)
+    clone.support = root.support
+
+    stack = [(root, clone)]
+    while stack:
+        old, new = stack.pop()
+        for child in old.children:
+            duplicate = Node(child.label, child.branch_length, child.is_tip)
+            duplicate.support = child.support
+            new.add_child(duplicate)
+            stack.append((child, duplicate))
+    return clone
+
+
+def _sum_lengths(above, below):
+    """Add two branch lengths when a node between them is spliced out.
+
+    Lengths are stored as the strings the file used, so this formats the sum
+    rather than round-tripping through repr: "%.12g" avoids both
+    0.30000000000000004 and a gratuitous 5.0 where 5 will do.
+    """
+    if above is None:
+        return below
+    if below is None:
+        return above
+    try:
+        return f"{float(above) + float(below):.12g}"
+    except (TypeError, ValueError):
+        return below
+
+
+def prune_tips(root, labels):
+    """Remove the named tips, in place. Returns (root, removed, missing).
+
+    `root` comes back None when fewer than two tips would remain - a one-tip
+    tree cannot be analysed, and reporting it as "everything fixed" would be
+    worse than refusing.
+
+    Two subtleties, both of which change the answer if skipped:
+
+    * Detaching a tip can empty its whole clade, so removal cascades upward
+      through any ancestor left with no children at all.
+    * A node left with exactly one child is not a real internal node - its
+      bipartition is its child's. It is spliced out and the two branch
+      lengths are added, otherwise a phylogram redraws with visibly short
+      branches and the analysis gains a redundant candidate clade.
+
+    Every tip carrying a requested label is removed, not just the first:
+    labels are the only handle the UI has, and duplicates are real.
+    """
+    wanted = set(labels)
+    victims = [tip for tip in root.get_tip_nodes() if tip.label in wanted]
+    removed = [tip.label for tip in victims]
+    missing = sorted(wanted - {tip.label for tip in victims})
+
+    for tip in victims:
+        node, parent = tip, tip.parent
+        while parent is not None:
+            parent.remove_child(node)
+            if parent.children:
+                break                       # parent survives, maybe unary
+            node, parent = parent, parent.parent   # clade emptied; drop it too
+        else:
+            return None, removed, missing   # that was the last tip
+
+    # Splice out unary nodes. Snapshot first: the walk mutates the tree.
+    for node in list(root.post_order()):
+        if node.is_tip or node.parent is None or len(node.children) != 1:
+            continue
+        child = node.children[0]
+        grandparent = node.parent
+        slot = grandparent.children.index(node)
+        node.remove_child(child)
+        grandparent.remove_child(node)
+        grandparent.children.insert(slot, child)   # keep left-to-right order
+        child.parent = grandparent
+        child.branch_length = _sum_lengths(node.branch_length,
+                                           child.branch_length)
+        # node.support is dropped: that bipartition is now the child's, and
+        # the child already carries its own support for the same split.
+
+    # The root itself can end up unary, possibly several times over.
+    while not root.is_tip and len(root.children) == 1:
+        root = root.children[0]
+        root.parent = None
+        root.branch_length = None    # a root has no incoming branch
+        root.support = None          # and no non-trivial split of its own
+
+    if root.is_tip or len(root.get_tip_nodes()) < 2:
+        return None, removed, missing
+    return root, removed, missing
+
+
 def index_tips(root):
     """Index a tree for fast clade queries.
 
