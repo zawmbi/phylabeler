@@ -21,6 +21,8 @@ Tree files may be plain or compressed (.nwk.gz, .tre.bz2, ...).
 Pure Python stdlib - no external dependencies.
 """
 
+import os
+
 from archive_io import open_text, strip_compression_suffix
 
 # Extensions understood as Newick trees, before any compression suffix.
@@ -32,8 +34,15 @@ _LENGTH_CHARS = set("0123456789.-+eE")
 
 
 def is_tree_filename(name):
-    """True if a filename looks like a Newick tree, compressed or not."""
-    return strip_compression_suffix(name).lower().endswith(TREE_SUFFIXES)
+    """True if a filename looks like a Newick tree, compressed or not.
+
+    macOS "._name" AppleDouble files (common in tar/zip archives made on a
+    Mac) share the tree's extension but hold resource-fork metadata.
+    """
+    base = os.path.basename(name)
+    if base.startswith("._"):
+        return False
+    return strip_compression_suffix(base).lower().endswith(TREE_SUFFIXES)
 
 
 def clean_newick_name(name):

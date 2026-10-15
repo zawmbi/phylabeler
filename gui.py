@@ -31,18 +31,28 @@ from monophyly import (MAIN_RANKS, CollapsedGroup, ConflictingTip,
 from help_content import HELP_SECTIONS, PANEL_HELP
 
 # File-dialog filters, kept next to each other so CLI and GUI stay in sync.
+# macOS Tk only compares a file's last extension against these patterns, so
+# "*.tre.gz" alone never matches tree.tre.gz there. The bare "*.gz *.bz2 *.xz"
+# entries make compressed files selectable everywhere; the content is checked
+# by magic bytes after picking anyway.
+COMPRESSED_PATTERNS = "*.gz *.bz2 *.xz"
+ARCHIVE_PATTERNS = "*.tar.gz *.tgz *.tar *.zip *.gz"
+
 TREE_FILETYPES = [
+    ("Tree files and archives",
+     "*.nwk *.tre *.tree *.newick *.tgz *.tar *.zip " + COMPRESSED_PATTERNS),
     ("Newick files", "*.nwk *.tre *.tree *.newick"),
-    ("Compressed Newick", "*.nwk.gz *.tre.gz *.tree.gz *.newick.gz"),
-    ("Tree archives", "*.tar.gz *.tgz *.tar *.zip"),
+    ("Compressed Newick",
+     "*.nwk.gz *.tre.gz *.tree.gz *.newick.gz " + COMPRESSED_PATTERNS),
+    ("Tree archives", ARCHIVE_PATTERNS),
     ("All files", "*.*"),
 ]
 
 TAXONOMY_FILETYPES = [
     ("Taxonomy dump or archive",
-     "*.dmp *.dmp.gz *.tar.gz *.tgz *.tar *.zip"),
-    ("DMP files", "*.dmp *.dmp.gz"),
-    ("NCBI archives", "*.tar.gz *.tgz *.tar *.zip"),
+     "*.dmp *.tgz *.tar *.zip " + COMPRESSED_PATTERNS),
+    ("DMP files", "*.dmp *.dmp.gz *.gz"),
+    ("NCBI archives", ARCHIVE_PATTERNS),
     ("All files", "*.*"),
 ]
 
@@ -1706,7 +1716,7 @@ class PhyLabelerApp:
         archive = filedialog.askopenfilename(
             title="Select taxdump.tar.gz / taxdmp.zip",
             filetypes=[
-                ("NCBI archives", "*.tar.gz *.tgz *.tar *.zip"),
+                ("NCBI archives", ARCHIVE_PATTERNS),
                 ("All files", "*.*"),
             ]
         )
@@ -1790,11 +1800,15 @@ class PhyLabelerApp:
         archive = filedialog.askopenfilename(
             title="Select Archive of Trees",
             filetypes=[
-                ("Tree archives", "*.tar.gz *.tgz *.tar *.zip"),
+                ("Tree archives", ARCHIVE_PATTERNS),
                 ("All files", "*.*"),
             ]
         )
         if not archive:
+            return
+        if not is_archive(archive):
+            # A single compressed tree such as tree.tre.gz.
+            self._add_tree_files([archive], select_last=True)
             return
 
         extracted = self._extract_tree_archive(archive)

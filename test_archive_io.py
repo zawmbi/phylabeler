@@ -198,6 +198,9 @@ def test_tree_inputs(path):
     check("gene1.nwk", is_tree_filename("gene1.nwk"), True)
     check("gene2.nwk.gz", is_tree_filename("gene2.nwk.gz"), True)
     check("x.tre.bz2", is_tree_filename("x.tre.bz2"), True)
+    check("x.tre.gz", is_tree_filename("x.tre.gz"), True)
+    check("macOS ._x.tre.gz is not a tree", is_tree_filename("._x.tre.gz"),
+          False)
     check("notes.txt", is_tree_filename("notes.txt"), False)
     check("archive.tar.gz is not a tree", is_tree_filename("archive.tar.gz"),
           False)
