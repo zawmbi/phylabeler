@@ -29,6 +29,19 @@ MAIN_RANKS = ("superkingdom", "kingdom", "phylum", "class", "order",
 
 _RANK_ORDER = {rank: i for i, rank in enumerate(MAIN_RANKS)}
 
+# NCBI bins for taxa of unknown or unassigned placement ("Salvia incertae
+# sedis", "unclassified Poaceae", "environmental samples"). They hold whatever
+# could not be placed, so they are not groups anyone claims are monophyletic
+# and testing them only manufactures conflicts.
+_PLACEHOLDER_MARKERS = ("incertae sedis", "unclassified", "environmental samples")
+
+
+def is_placeholder_taxon(name):
+    """True for NCBI pseudo-taxa that only collect unplaced organisms."""
+    lowered = name.lower()
+    return any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
+
+
 # How many equally-cheap repairs to keep per group. Enough to show a
 # biologist the real ambiguity, bounded so a pathological tree cannot
 # blow up memory.
@@ -259,8 +272,19 @@ class MonophylyChecker:
 
     def __init__(self, taxonomy_db):
         self.db = taxonomy_db
+        self._lineages = {}
 
     # ---- Tip resolution ----
+
+    def _lineage(self, tax_id):
+        """Lineage codes tip to root, minus placeholder bins (cached)."""
+        cached = self._lineages.get(tax_id)
+        if cached is None:
+            cached = self._lineages[tax_id] = [
+                code for code in self.db.get_lineage_codes(tax_id)
+                if not is_placeholder_taxon(
+                    self.db.get_scientific_name(code))]
+        return cached
 
     def resolve_tips(self, root, progress_callback=None):
         """Resolve every tip label to a taxonomy lineage.
@@ -276,7 +300,7 @@ class MonophylyChecker:
 
         for tip in all_tips:
             match = self.db.resolve_tip(tip)
-            lineage = self.db.get_lineage_codes(match.tax_id) if match else []
+            lineage = self._lineage(match.tax_id) if match else []
             if match and lineage:
                 matches[tip] = match
                 tip_lineages[tip] = lineage
@@ -729,7 +753,7 @@ class MonophylyChecker:
             cached = lineage_cache.get(code)
             if cached is None:
                 cached = lineage_cache[code] = set(
-                    self.db.get_lineage_codes(code))
+                    self._lineage(code))
             return cached
 
         def common_ancestor(left, right):
@@ -737,7 +761,7 @@ class MonophylyChecker:
                 return left if right is None else (right if left is None
                                                    else left)
             above = lineage_set(right)
-            for code in self.db.get_lineage_codes(left):
+            for code in self._lineage(left):
                 if code in above:
                     return code
             return None

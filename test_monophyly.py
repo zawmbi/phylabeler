@@ -12,7 +12,7 @@ import sys
 
 from taxonomy_db import TaxonomyDB, normalize_name
 from tree_parser import parse_newick, index_tips, quote_if_needed
-from monophyly import MonophylyChecker
+from monophyly import MonophylyChecker, is_placeholder_taxon
 
 # root(1)
 #  +- Metazoa(100, kingdom)
@@ -196,6 +196,31 @@ def test_index_tips():
     check("root span", spans[id(tree)], (0, 3, 4))
     check("left clade span", spans[id(tree.children[0])], (0, 1, 2))
     check("right clade span", spans[id(tree.children[1])], (2, 3, 2))
+
+
+def test_placeholder_taxa():
+    print("\nNCBI placeholder bins are never tested as groups")
+    check("incertae sedis", is_placeholder_taxon("Salvia incertae sedis"),
+          True)
+    check("unclassified", is_placeholder_taxon("unclassified Poaceae"), True)
+    check("real genus", is_placeholder_taxon("Salvia"), False)
+
+    # Homo naledi and Homo habilis sit in a "Homo incertae sedis" bin, which
+    # the tree splits; the bin must not be reported as a broken group.
+    db = build_db()
+    db.code_to_parent.update({"305": "300", "303": "305", "304": "305"})
+    db.code_to_rank["305"] = "no rank"
+    db.code_to_scientific["305"] = "Homo incertae sedis"
+    tree = parse_newick("(((Homo_habilis,Homo_sapiens),Homo_naledi),"
+                        "(Drosophila_melanogaster,Drosophila_simulans));")
+    out = MonophylyChecker(db).analyze(tree)
+    names = {r.name for r in out["taxon_results"]}
+    check("bin not among tested groups", "Homo incertae sedis" in names,
+          False)
+    check("real parent still tested", "Homo" in names, True)
+    labels = {r.mrca_name for r in out["node_results"]}
+    check("no node labelled with the bin", "Homo incertae sedis" in labels,
+          False)
 
 
 def test_monophyly(db):
@@ -555,6 +580,7 @@ def main():
     test_name_resolution(db)
     test_taxid_tips(db)
     test_parsing()
+    test_placeholder_taxa()
     test_index_tips()
     test_monophyly(db)
     test_conflict_costs(db)
