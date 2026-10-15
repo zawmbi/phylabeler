@@ -55,6 +55,8 @@ NAMES = [
     ("312", "Homo sapiens", "synonym"),
     # A genuine homonym: two different taxa legitimately named "Rosa".
     ("999", "Rosa", "scientific name"),
+    # A numeric strain name, the kind a retired taxon ID could collide with.
+    ("313", "4040", "equivalent name"),
 ]
 NODES.append(("999", "210", "genus"))
 
@@ -80,8 +82,9 @@ def build_db():
     db.code_to_parent = {}
     db.code_to_rank = {}
     db.homonyms = {}
+    db.merged = {"4001": "301"}          # retired ID -> Homo sapiens
     db.loaded = False
-    db._cache_version = 3
+    db._cache_version = 4
 
     names = "".join(f"{t}\t|\t{n}\t|\t\t|\t{c}\t|\n" for t, n, c in NAMES)
     nodes = "".join(f"{t}\t|\t{p}\t|\t{r}\t|\n" for t, p, r in NODES)
@@ -101,6 +104,25 @@ def test_name_resolution(db):
           db.lookup_name("Homo sapiens"), "301")
     check("common name still resolves", db.lookup_name("Fruit fly"), "311")
     check("unknown name", db.lookup_name("Nonexistent thing"), None)
+
+
+def test_taxid_tips(db):
+    print("\nTips labelled with NCBI taxon IDs")
+    match = db.resolve_tip("311")
+    check("bare taxon ID", (match.tax_id, match.method), ("311", "taxid"))
+    check("taxon ID counts as exact", match.is_exact, True)
+    check("taxon ID takes the scientific name", match.matched_name,
+          "Drosophila melanogaster")
+    match = db.resolve_tip("4001")
+    check("retired ID follows merged.dmp", (match.tax_id, match.method),
+          ("301", "merged"))
+    check("numeric label never matched as a name", db.resolve_tip("4040"),
+          None)
+    check("unknown ID", db.resolve_tip("123456"), None)
+    check("display_label names an ID", db.display_label("311"),
+          "311 (Drosophila melanogaster)")
+    check("display_label leaves names alone",
+          db.display_label("Homo_sapiens"), "Homo_sapiens")
 
     print("\nHomonyms are recorded rather than silently resolved")
     check("Rosa is flagged ambiguous", "rosa" in db.homonyms, True)
@@ -531,6 +553,7 @@ def test_removal_simulation(db):
 def main():
     db = build_db()
     test_name_resolution(db)
+    test_taxid_tips(db)
     test_parsing()
     test_index_tips()
     test_monophyly(db)

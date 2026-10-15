@@ -137,6 +137,7 @@ def _process_single(args, checker):
 
     # Lead with the sequences worth rechecking: on a real tree a single
     # misplaced one accounts for most of the broken groups.
+    show = checker.db.display_label
     repairing = [t for t in analysis["conflicting_tips"] if t.repairs]
     if repairing:
         fixable = sum(len(t.repairs) for t in repairing)
@@ -146,7 +147,7 @@ def _process_single(args, checker):
             names = ", ".join(g.name for g in tip.repairs[:3])
             if len(tip.repairs) > 3:
                 names += f", +{len(tip.repairs) - 3} more"
-            print(f"  {tip.label:<32} repairs {len(tip.repairs):>2} "
+            print(f"  {show(tip.label):<32} repairs {len(tip.repairs):>2} "
                   f"({tip.role}): {names}")
         if len(repairing) > 5:
             print(f"  ... {len(repairing) - 5} more single-group tips")
@@ -154,7 +155,7 @@ def _process_single(args, checker):
     if broken:
         print("\nConflicting groups (cheapest fix first):")
         for g in sorted(broken, key=lambda x: x.severity_sort_key())[:15]:
-            blame = g.culprit or "no single tip"
+            blame = show(g.culprit) if g.culprit else "no single tip"
             print(f"  move {g.conflict_cost:<4} {g.name} "
                   f"({g.rank}, {g.member_count} members)"
                   f"  <- {blame}")
@@ -237,7 +238,7 @@ def _run_batch(args, checker, tree_files):
             repairing = [t for t in analysis["conflicting_tips"] if t.repairs]
             # Across many gene trees, "which sequence keeps causing this?"
             # is the question worth answering per tree.
-            worst = (f", worst tip {repairing[0].label} "
+            worst = (f", worst tip {checker.db.display_label(repairing[0].label)} "
                      f"({len(repairing[0].repairs)})" if repairing else "")
             batch_summary.append(
                 f"{basename}: {tree.count_tips()} tips, "

@@ -820,6 +820,7 @@ class MonophylyChecker:
         view, which has one row per named group instead of one per node.
         """
         lines = []
+        show = self.db.display_label
 
         if taxon_results is not None:
             groups = self.collapse_groups(taxon_results)
@@ -840,7 +841,7 @@ class MonophylyChecker:
                     if len(tip.repairs) > 6:
                         names += f"... (+{len(tip.repairs) - 6} more)"
                     lines.append(
-                        f"  {tip.label}: repairs "
+                        f"  {show(tip.label)}: repairs "
                         f"{plural(len(tip.repairs), 'group')} as {tip.role}")
                     lines.append(f"      {names}")
                 if len(repairing) > 10:
@@ -869,16 +870,16 @@ class MonophylyChecker:
                         f"      fix: move {plural(g.conflict_cost, 'tip')} "
                         f"({g.conflict_type})")
                     if g.culprit:
-                        lines.append(f"      blame: {g.culprit}")
+                        lines.append(f"      blame: {show(g.culprit)}")
                     if g.intruders:
-                        listed = ", ".join(g.intruders[:5])
+                        listed = ", ".join(map(show, g.intruders[:5]))
                         if len(g.intruders) > 5:
                             listed += f"... (+{len(g.intruders) - 5} more)"
                         lines.append(
                             f"      {plural(len(g.intruders), 'tip')} "
                             f"inside: {listed}")
                     if g.outliers:
-                        listed = ", ".join(g.outliers[:5])
+                        listed = ", ".join(map(show, g.outliers[:5]))
                         if len(g.outliers) > 5:
                             listed += f"... (+{len(g.outliers) - 5} more)"
                         lines.append(
@@ -919,6 +920,15 @@ class MonophylyChecker:
                 for m in sorted(ambiguous, key=lambda x: x.label):
                     lines.append(
                         f"  {m.label} -> ambiguous name, several taxa share it")
+                lines.append("")
+
+            retired = [m for m in matches.values() if m.method == "merged"]
+            if retired:
+                lines.append("--- Outdated Taxon IDs ---")
+                lines.append("NCBI merged these into newer IDs; the current "
+                             "taxon was used.")
+                for m in sorted(retired, key=lambda x: x.label):
+                    lines.append(f"  {m.label} -> {m.tax_id} ({m.matched_name})")
                 lines.append("")
 
         mono = [r for r in results if r.status == "monophyletic"]

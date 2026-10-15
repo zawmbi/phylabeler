@@ -2865,6 +2865,17 @@ class PhyLabelerApp:
                 text.insert(tk.END, f"  {m.label}: {names}\n")
             text.insert(tk.END, "\n")
 
+        retired = sorted((m for m in self.tip_matches.values()
+                          if m.method == "merged"), key=lambda m: m.label)
+        if retired:
+            text.insert(tk.END, f"--- Outdated taxon IDs ({len(retired)}) ---\n")
+            text.insert(tk.END, "NCBI has merged these IDs into newer ones; "
+                                "the current taxon was used.\n\n")
+            for m in retired:
+                text.insert(tk.END, f"  {m.label} -> {m.tax_id} "
+                                    f"({m.matched_name})\n")
+            text.insert(tk.END, "\n")
+
         if not self.unresolved_tips and not inexact and not ambiguous:
             text.insert(tk.END, "Every tip matched exactly. Nothing to review.\n")
 

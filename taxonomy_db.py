@@ -22,6 +22,8 @@ NCBI_TAXONOMY_URL = "https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz"
 
 # The only two members of an NCBI taxonomy dump this tool needs.
 TAXDUMP_MEMBERS = ("names.dmp", "nodes.dmp")
+# Read when present: maps retired tax_ids to the ones that replaced them.
+OPTIONAL_MEMBERS = ("merged.dmp",)
 
 # Tokens gene-tree tips commonly carry alongside the organism name.
 _TIP_SEPARATORS = ("|", "/", "@", "#")
@@ -46,6 +48,8 @@ class TipMatch:
       "trimmed"  matched after stripping a gene/accession suffix
       "partial"  matched after dropping trailing name tokens
       "genus"    only the first token matched
+      "taxid"    the label is an NCBI taxon ID present in nodes.dmp
+      "merged"   the label is a retired taxon ID, followed via merged.dmp
     """
 
     __slots__ = ("label", "tax_id", "matched_name", "method", "rank",
@@ -62,7 +66,7 @@ class TipMatch:
 
     @property
     def is_exact(self):
-        return self.method == "exact"
+        return self.method in ("exact", "taxid", "merged")
 
     def __repr__(self):
         return (f"TipMatch({self.label} -> {self.tax_id} "
@@ -87,8 +91,9 @@ class TaxonomyDB:
         self.code_to_parent = {}     # tax_id -> parent tax_id
         self.code_to_rank = {}       # tax_id -> rank string
         self.homonyms = {}           # normalized name -> [competing tax_ids]
+        self.merged = {}             # retired tax_id -> current tax_id
         self.loaded = False
-        self._cache_version = 3      # Bump to invalidate old caches
+        self._cache_version = 4      # Bump to invalidate old caches
 
     # ---- Public API ----
 
@@ -120,6 +125,7 @@ class TaxonomyDB:
         if names_file and nodes_file:
             self._parse_names(names_file, progress_callback)
             self._parse_nodes(nodes_file, progress_callback)
+            self._parse_merged_beside(nodes_file, progress_callback)
             self._save_cache(progress_callback)
             self.loaded = True
             return True
@@ -127,7 +133,18 @@ class TaxonomyDB:
         return False
 
     def _rebuild_from_cache_dir(self, progress_callback=None):
-        """Re-parse taxonomy from source files left in the cache directory."""
+        """Re-parse taxonomy from source files left in the cache directory.
+
+        A full dump archive is preferred over loose dmp files because it also
+        carries merged.dmp, which loose copies often leave behind.
+        """
+        for name in ("taxdump.tar.gz", "taxdump.tgz", "taxdmp.zip"):
+            archive = os.path.join(self.cache_dir, name)
+            if os.path.exists(archive):
+                if progress_callback:
+                    progress_callback(f"Rebuilding cache from {name}...")
+                return self.load_archive(archive, progress_callback)
+
         names_path = os.path.join(self.cache_dir, "names.dmp")
         nodes_path = os.path.join(self.cache_dir, "nodes.dmp")
         if os.path.exists(names_path) and os.path.exists(nodes_path):
@@ -135,16 +152,10 @@ class TaxonomyDB:
                 progress_callback("Rebuilding cache from names.dmp/nodes.dmp...")
             self._parse_names(names_path, progress_callback)
             self._parse_nodes(nodes_path, progress_callback)
+            self._parse_merged_beside(nodes_path, progress_callback)
             self._save_cache(progress_callback)
             self.loaded = True
             return True
-
-        for name in ("taxdump.tar.gz", "taxdump.tgz", "taxdmp.zip"):
-            archive = os.path.join(self.cache_dir, name)
-            if os.path.exists(archive):
-                if progress_callback:
-                    progress_callback(f"Rebuilding cache from {name}...")
-                return self.load_archive(archive, progress_callback)
 
         return False
 
@@ -160,15 +171,18 @@ class TaxonomyDB:
                 f"Reading {os.path.basename(archive_path)}...")
 
         seen = set()
-        for basename, stream in stream_members(archive_path,
-                                               wanted=TAXDUMP_MEMBERS):
+        self.merged = {}
+        for basename, stream in stream_members(
+                archive_path, wanted=TAXDUMP_MEMBERS + OPTIONAL_MEMBERS):
             if basename in seen:
                 continue
             seen.add(basename)
             if basename == "names.dmp":
                 self._parse_names_stream(stream, progress_callback)
-            else:
+            elif basename == "nodes.dmp":
                 self._parse_nodes_stream(stream, progress_callback)
+            else:
+                self._parse_merged_stream(stream, progress_callback)
 
         missing = [m for m in TAXDUMP_MEMBERS if m not in seen]
         if missing:
@@ -243,6 +257,21 @@ class TaxonomyDB:
         if not label:
             return None
 
+        # Trees exported from NCBI-backed pipelines label tips with bare
+        # taxon IDs ("1185998"). Never fall through to name matching for
+        # these: a few numeric strain/isolate names exist in names.dmp and
+        # would hand back an unrelated taxon.
+        stripped = label.strip()
+        if stripped.isdigit():
+            if stripped in self.code_to_parent:
+                code, method = stripped, "taxid"
+            elif self.merged.get(stripped) in self.code_to_parent:
+                code, method = self.merged[stripped], "merged"
+            else:
+                return None     # deleted or unknown ID
+            return TipMatch(label, code, self.code_to_scientific.get(code, ""),
+                            method, self.code_to_rank.get(code, ""))
+
         # Whole label, normalized.
         match = self._match(label, "exact")
         if match:
@@ -279,6 +308,18 @@ class TaxonomyDB:
         return TipMatch(label=text, tax_id=code, matched_name=key,
                         method=method, rank=self.code_to_rank.get(code, ""),
                         ambiguous=key in self.homonyms)
+
+    def display_label(self, label):
+        """A tip label made readable: "312418 (Banara guianensis)".
+
+        Only bare taxon IDs gain a name; ordinary labels already are one.
+        """
+        if not label or not label.strip().isdigit():
+            return label
+        match = self.resolve_tip(label)
+        if match and match.matched_name:
+            return f"{label} ({match.matched_name})"
+        return label
 
     def get_homonyms(self, name):
         """Return competing tax_ids for an ambiguous name, newest listing first."""
@@ -318,6 +359,26 @@ class TaxonomyDB:
         """Parse an NCBI nodes.dmp file, plain or gzipped."""
         with open_text(nodes_file) as f:
             self._parse_nodes_stream(f, progress_callback)
+
+    def _parse_merged_beside(self, nodes_file, progress_callback=None):
+        """Parse merged.dmp(.gz) sitting next to nodes.dmp, if there is one."""
+        self.merged = {}
+        folder = os.path.dirname(os.path.abspath(nodes_file))
+        for name in ("merged.dmp", "merged.dmp.gz"):
+            path = os.path.join(folder, name)
+            if os.path.exists(path):
+                with open_text(path) as f:
+                    self._parse_merged_stream(f, progress_callback)
+                return
+
+    def _parse_merged_stream(self, stream, progress_callback=None):
+        """Parse merged.dmp: "old_tax_id | new_tax_id |" per line."""
+        for line in stream:
+            parts = line.split("|")
+            if len(parts) >= 2:
+                self.merged[parts[0].strip()] = parts[1].strip()
+        if progress_callback:
+            progress_callback(f"Parsed {len(self.merged):,} merged tax_ids")
 
     def _parse_names_stream(self, stream, progress_callback=None):
         """Parse names.dmp content from any open text stream.
@@ -424,6 +485,7 @@ class TaxonomyDB:
             "code_to_parent": self.code_to_parent,
             "code_to_rank": self.code_to_rank,
             "homonyms": self.homonyms,
+            "merged": self.merged,
         }
         with open(cache_file, "wb") as f:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -456,6 +518,7 @@ class TaxonomyDB:
             self.code_to_parent = data["code_to_parent"]
             self.code_to_rank = data["code_to_rank"]
             self.homonyms = data.get("homonyms", {})
+            self.merged = data.get("merged", {})
             self.loaded = True
 
             if progress_callback:

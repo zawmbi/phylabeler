@@ -128,8 +128,13 @@ contents rather than its name, so a renamed archive still works. In the GUI, use
 
 ## Tree input
 
-Trees may be plain or compressed (`tree.nwk.gz`), and batch mode accepts either
-a directory or an archive of trees:
+Trees may be plain or compressed (`tree.nwk.gz`, `tree.tre.gz`), and batch mode
+accepts either a directory or an archive of trees.
+
+Tips may be species names (`Homo_sapiens`) or bare NCBI taxon IDs (`9606`).
+Retired IDs are followed to their current taxon via `merged.dmp` and listed
+under "Outdated Taxon IDs" in the report; reports show ID tips with their
+name, e.g. `312418 (Macrothumia kuhlmannii)`.
 
 ```
 python main.py --batch trees/ --cache
