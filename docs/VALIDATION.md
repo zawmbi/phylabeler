@@ -111,7 +111,7 @@ node whose descendants are exactly those tips. The tool computes this as
 equivalence `clusters == 1 ⟺ monophyletic ⟺ cost == 0` on every group of
 every random tree.
 
-Three notes on scope:
+Four notes on scope:
 
 - This is **exclusivity relative to the tips you sampled**, not a claim about
   the group in nature. A genus can look monophyletic simply because you
@@ -119,9 +119,19 @@ Three notes on scope:
 - Tips that match no taxon are reported but **never counted as intruders**.
   We cannot say an unplaced sequence does not belong, and blaming it would
   let one unmatched tip appear to break every group it sits inside.
-- A **polytomy** currently reports as non-monophyletic even though an
-  unresolved node does not actually contradict the group. This is a known
-  limitation, listed in `docs/ONBOARDING.md`.
+- **Weak branches do not count as contradiction.** An unresolved node fails
+  to confirm a group but does not reject it. After the strict test above, each
+  non-clade group is re-tested with weak branches collapsed into polytomies
+  (default: internal length ≤ 1e-05; optionally support below
+  `--min-support`). If it is then compatible with the tree — every lineage
+  leaving its polytomy holds only members or no members — it is reported as
+  *contradicted only by weak branches*, not broken, and never used to blame a
+  tip. Its "tips to move" is still the as-drawn cost, so the oracle checks in
+  section 2 are unaffected. `test_monophyly.py` covers the length and support
+  thresholds and the no-blame rule.
+- **NCBI placeholder bins are not groups.** "X incertae sedis",
+  "unclassified X" and "environmental samples" are removed from tip lineages
+  before any test, so they are never reported as broken.
 
 ### "Does it depend on how I ordered my tips, or which run it is?"
 
@@ -195,11 +205,15 @@ fault:
 - or the conflict may be real biology: paralogy, horizontal transfer,
   introgression, incomplete lineage sorting
 
-The tool also does not currently weigh conflicts by branch support. Support
-values are preserved and drawn, but a conflict on a 30 %-support branch and
-one on a 100 %-support branch are reported alike — and only the second is
-worth acting on. Check the support on the branches involved before drawing a
+Weak branches are handled (see above), but only by a threshold you choose:
+support is off by default because trees mix 0–1 and 0–100 scales, so set
+`--min-support` (or Analysis > Weak Branch Settings) if your tree carries
+bootstrap or posterior values. A conflict just above the threshold is still
+reported as supported — check the branches involved before drawing a
 conclusion.
+
+Species-level conflicts are listed separately in the report because they are
+so often real biology rather than error.
 
 The diagnostic pattern for a data problem is a **biologically impossible
 placement on a well-supported branch**. Everything else needs judgement.
@@ -210,6 +224,6 @@ placement on a well-supported branch**. Everything else needs judgement.
 
 ```
 python validate.py         # correctness of the answers (this document)
-python test_monophyly.py   # 88 behavioural assertions
-python test_archive_io.py  # 46 input-handling assertions
+python test_monophyly.py   # 132 behavioural assertions
+python test_archive_io.py  # 48 input-handling assertions
 ```

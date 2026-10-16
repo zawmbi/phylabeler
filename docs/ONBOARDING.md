@@ -94,8 +94,10 @@ This file builds the project knowledge base from NCBI taxonomy.
 ### Main responsibilities
 
 - Parse `names.dmp` and `nodes.dmp`, plain or gzipped
-- Parse both straight out of an un-extracted `taxdump.tar.gz` / `taxdmp.zip`
-  in a single streaming pass, via `load_archive()`
+- Parse `merged.dmp` when present (inside the archive, or next to
+  `nodes.dmp`) to map retired tax IDs to their replacements
+- Parse all of them straight out of an un-extracted `taxdump.tar.gz` /
+  `taxdmp.zip` in a single streaming pass, via `load_archive()`
 - Store lookup dictionaries
 - Save and load a pickle cache
 - Download fresh taxonomy from NCBI
@@ -113,16 +115,33 @@ This file builds the project knowledge base from NCBI taxonomy.
   Maps tax ID to parent tax ID.
 - `code_to_rank`
   Maps tax ID to taxonomic rank.
+- `merged`
+  Maps a retired tax ID to the one NCBI merged it into.
+
+The pickle cache carries a version number (`_cache_version`, currently 4).
+Bumping it makes old caches rebuild themselves from the archive or dmp files
+left in the cache directory, with no re-download.
 
 ### Tip-name resolution behavior
 
 `name_to_code` is keyed by a normalised form (lowercase, underscores as
-spaces, whitespace collapsed), so every lookup is O(1). `resolve_tip()` then
-tries, in order:
+spaces, whitespace collapsed), so every lookup is O(1). `resolve_tip()` first
+handles all-digit labels as NCBI tax IDs:
+
+- a current ID resolves directly (method `taxid`)
+- a retired ID is followed through `merged` (method `merged`)
+- anything else returns no match — numeric labels are never tried as names,
+  because NCBI holds numeric strain/isolate names that would otherwise pair
+  an outdated ID with an unrelated organism
+
+Other labels are tried, in order:
 
 1. the whole label
 2. the label with any `|`, `/`, `@`, `#` suffix stripped
 3. progressively fewer trailing tokens, down to the genus
+
+`display_label()` turns an ID tip into `"312418 (Macrothumia kuhlmannii)"`
+for reports and the CLI.
 
 Each match records *how* it matched, because a genus-level fallback is a much
 weaker claim than a species-level hit and the report says so.
@@ -223,6 +242,28 @@ is **2**. `test_monophyly.py::test_conflict_costs` pins this.
 A single intruder nested deep in a ladder splits Fabaceae's 25 members into 8
 pure clades while remaining a one-tip fix. Never sort on it.
 
+### Placeholder bins are dropped
+
+`_lineage()` strips NCBI placeholder taxa ("X incertae sedis",
+"unclassified X", "environmental samples") from every tip lineage before
+anything else runs, so they are neither tested as groups nor used as node
+labels. They only collect organisms of unknown placement.
+
+### Weak branches are polytomies
+
+After the strict test, a group with `conflict_cost > 0` is re-tested by
+`_compatible()`: climb from the members' MRCA through weak nodes to the
+polytomy it belongs to, then require every lineage leaving that polytomy to
+hold only members or no members. A weak node is an internal branch with
+length ≤ `min_branch_length` (default `DEFAULT_MIN_BRANCH_LENGTH`, 1e-05) or
+support below `min_support` (off by default; set on `MonophylyChecker`).
+
+Groups that pass get status `unsupported_conflict`. Use `is_broken` for
+"contradicted by a supported branch", `is_unsupported_conflict` for the weak
+case, and `is_monophyletic` for an actual clade. `rank_conflicting_tips()`
+only credits tips from `is_broken` groups, and `severity_sort_key()` puts
+unsupported conflicts last. `conflict_cost` stays the as-drawn cost.
+
 ### Unplaced tips are wildcards
 
 Tips that matched no taxon are counted in neither total, so they never spoil a
@@ -290,6 +331,11 @@ Selecting a row in the results tables highlights that clade and scrolls to it.
 
 ## CLI Workflow
 
+Trees may be plain or compressed (`.nwk.gz`, `.tre.gz`, `.bz2`, `.xz`);
+macOS `._` resource-fork files inside archives are skipped. Weak-branch
+handling is set with `--min-branch-length` (default 1e-05, `-1` disables)
+and `--min-support` (off by default, on the tree's own scale).
+
 ### Single-tree mode
 
 Typical path:
@@ -321,15 +367,17 @@ monophyletic internal nodes receive cleaned taxonomy labels suitable for Newick.
 
 ### Report
 
-The report summarizes:
+The report leads with the taxon-level view:
 
-- total internal nodes analyzed
-- monophyletic count
-- non-monophyletic count
-- unresolved count
-- a sorted list of monophyletic clades
-- a sorted list of non-monophyletic clades with intruders
-- unresolved tips, if any
+- tips behind the most conflicts, with a note on possible causes
+- counts: monophyletic, supported conflicts, conflicts across weak branches
+  only, and the weak-branch rule used
+- broken groups above species level, cheapest fix first
+- species-level conflicts, in their own section
+- groups contradicted only by weak branches
+- monophyletic groups
+- tip-matching warnings and outdated taxon IDs
+- node-level counts at the end
 
 ## Recommended Study Path For PI Meetings
 
@@ -355,9 +403,11 @@ Use this sequence when explaining the project:
 - `conflict_cost` counts tips, not tree edits. It is the minimum number of
   tips that must move, which is the right work-queue ordering but is not a
   branch-length or likelihood-aware measure of how wrong the tree is.
-- A star tree reports its groups as non-monophyletic even though a polytomy
-  does not actually contradict them — it is unresolved, not in conflict. The
-  distinction is not currently made.
+- Weak-branch handling is threshold-based. A conflict just above the length
+  or support threshold still counts as supported, and support is ignored
+  unless `--min-support` is set.
+- The tree view still draws tips by their label, so trees with taxon-ID tips
+  show numbers on the canvas (reports and the CLI show names).
 - Groups with a single sampled tip are omitted: they are monophyletic by
   definition and say nothing.
 - The modern UI and CLI share the same core analysis engine.
@@ -369,8 +419,10 @@ Use this sequence when explaining the project:
 Both suites are self-contained, need no data files and no test runner:
 
 ```
-python test_monophyly.py     # resolution, parsing, monophyly
+python test_monophyly.py     # resolution, parsing, monophyly, weak branches
 python test_archive_io.py    # compressed and archived inputs
+python -m pytest -q          # the same suites under pytest (see conftest.py)
+python validate.py           # independent brute-force verification
 ```
 
 ## Practical Questions To Ask While Reading
@@ -391,4 +443,5 @@ If you want to extend the project later, likely high-value directions are:
 - search/filter tools in the results UI
 - richer tree rendering for large trees
 - explicit export of unresolved-name diagnostics
+- an option to draw scientific names instead of taxon IDs on the canvas
 - clearer separation of legacy and modern code paths

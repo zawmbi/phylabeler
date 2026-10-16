@@ -65,35 +65,52 @@ appears once, rather than repeating at every nested node beneath it.
 
 - **Conflicting Tips** — start here. Tips ranked by how many groups removing
   them would repair. On the bundled test tree one sequence accounts for 10 of
-  the 22 conflicts.
+  the 22 conflicts. A tip here is where to look, not proof of a bad sequence:
+  outdated taxonomy, hybridization and incomplete lineage sorting cause
+  conflicts too.
 - **Broken Groups** — sorted by **Tips to move**: the fewest tips that would
   have to move for the group to be a clade. That is the real difficulty, and
   it is not the intruder count — a group whose two sampled tips merely are not
   sister sweeps a large enclosing clade but is still a one-tip problem.
   **Conflict** says whether foreign tips are *inside* the group (`intruded`),
   the group's own members are *elsewhere* (`scattered`), or both.
+  **Support** says whether a supported branch contradicts the group, or only
+  weak branches do (see below); weak-only rows sort last.
 - **Merge groups with identical tips** — when several nested ranks contain
   exactly the same sampled tips the tree cannot tell them apart, so they share
   one expandable row (`Apiales … Apioideae`). Untick to see every rank.
 - **Show rank** / **Conflict** filter the table; ranks include `clade` and
-  `no rank`, which is where most deep conflicts live.
+  `no rank`, which is where most deep conflicts live. **Conflict** can also
+  show supported conflicts only, or weak-branch-only ones.
 - **Tip Matching** — which tips failed to match, which matched only after
   dropping name tokens (so they sit at a coarser rank than the label implies),
-  and which names are ambiguous across unrelated taxa. Tips that match nothing
-  are reported, never counted as intruders.
+  which names are ambiguous across unrelated taxa, and which taxon IDs NCBI
+  has merged into newer ones. Tips that match nothing are reported, never
+  counted as intruders.
 
-**One tip explains it** names the sequence to check. When several tips would
+**One tip explains it** names the tip whose removal alone repairs the group. When several tips would
 repair a group equally well the cell reads `Cucurbita_pepo or 2 others`, and
 selecting the row lists them all — with only two sampled members of a group
 the tree genuinely cannot say which one moved, and naming one as the answer
 would be a guess dressed as a finding.
 
-Internal branches of length 1e-05 or less are treated as unresolved, so a
-group split only across them is reported as "contradicted only by weak
-branches" rather than broken. `--min-support 70` (on the tree's own scale)
-does the same for poorly supported branches; `--min-branch-length -1` turns
-the length test off. Species-level conflicts are listed separately, and NCBI
-placeholder bins ("incertae sedis", "unclassified") are never tested.
+### Weak branches, species, and placeholder taxa
+
+An unresolved node fails to confirm a group but does not contradict it.
+Internal branches of length 1e-05 or less — the placeholder length RAxML and
+IQ-TREE write where the data hold no signal — are therefore treated as
+polytomies: a group that fits the tree once they collapse is reported as
+"contradicted only by weak branches" rather than broken, and never used to
+blame a tip. `--min-support 70` (on the tree's own scale; `0.95` for
+posteriors) does the same for poorly supported branches, and
+`--min-branch-length -1` turns the length test off. In the GUI both live under
+**Analysis > Weak Branch Settings** and are remembered between runs.
+
+Species and infraspecific conflicts get their own section in the report:
+non-monophyletic species are common biology, so they weigh less than a broken
+genus or family. NCBI placeholder bins ("incertae sedis", "unclassified",
+"environmental samples") are never tested — they only collect organisms of
+unknown placement.
 
 Bootstrap/support values in the input are preserved. Labelled trees are written
 as `Fabaceae/98` by default; `--label-format taxon` or `support` writes just one

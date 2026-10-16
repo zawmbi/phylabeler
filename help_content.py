@@ -26,15 +26,18 @@ PANEL_HELP = {
     ),
     "trees": (
         "The Newick trees to analyse.\n\n"
-        "Files may be plain or gzipped. You can add several at once, a whole\n"
-        "directory, or an archive of trees via File > Open Trees from Archive.",
+        "Files may be plain or compressed (.nwk.gz, .tre.gz, .bz2, .xz). You\n"
+        "can add several at once, a whole directory, or an archive of trees\n"
+        "via File > Open Trees from Archive. Tips may be species names or\n"
+        "bare NCBI taxon IDs.",
         "Getting Started",
     ),
     "analysis": (
         "Run the monophyly check on the selected tree, or on every loaded\n"
         "tree at once.\n\n"
         "The filters below control which rows the results tables show; they\n"
-        "never change the analysis itself.",
+        "never change the analysis itself. Which branches count as too weak\n"
+        "to contradict a group is set under Analysis > Weak Branch Settings.",
         "Reading Results",
     ),
     "search": (
@@ -84,7 +87,8 @@ FOUR STEPS
    file's contents, so a renamed archive still works.
 
 2. Add one or more trees.
-   "Add Tree(s)" takes Newick files, plain or gzipped. For many trees use
+   "Add Tree(s)" takes Newick files (.nwk, .tre, .tree, .newick), plain or
+   compressed - tree.tre.gz, tree.nwk.bz2 and so on. For many trees use
    File > Open Multiple Trees (a directory) or File > Open Trees from Archive
    (a .tar.gz / .zip). Click a file in the list to display it - adding does
    not select.
@@ -96,12 +100,25 @@ FOUR STEPS
 
 4. Read the results, starting with the Conflicting Tips tab.
 
+Optional: Analysis > Weak Branch Settings decides which branches are too weak
+to count against a group (see "Reading Results"). The default suits most
+RAxML and IQ-TREE output; set a support threshold if your tree has bootstrap
+or posterior values.
+
 TIP NAMES
 
 Tips are matched to NCBI by name. "Homo_sapiens", "homo sapiens" and
 "Homo sapiens" all match. Labels carrying extra tokens still resolve:
 "Homo_sapiens|COX1" and "Homo_sapiens_KX12345" both find Homo sapiens, and
 "Homo_notaspecies" falls back to the genus.
+
+Tips may also be bare NCBI taxon IDs ("9606"), as written by many
+NCBI-backed pipelines. An ID that NCBI has since merged into a newer one is
+followed to the current taxon and listed under "Outdated taxon IDs" in the
+Tip Matching tab. A numeric label is never matched as a name - a few strain
+and isolate names in NCBI are plain numbers, and pairing an ID with one of
+those would place the tip in an unrelated organism. Reports print ID tips
+with their name, e.g. "312418 (Macrothumia kuhlmannii)".
 
 Anything matched loosely is listed in the Tip Matching tab, because a
 genus-level match is a weaker claim than a species-level one and the analysis
@@ -247,7 +264,7 @@ WHEN LABELS DISAPPEAR
 Labels are placed so they never sit on top of one another. Bigger clades are
 placed first, so when two nested groups compete for the same spot the more
 inclusive one keeps it. A name that has to shift gets a thin leader line back
-to its own branch.https://github.com/zawmbi/phylabeler
+to its own branch.
 
 If a name still cannot fit it is dropped rather than drawn over its
 neighbour, and the count is reported next to the display toggles, e.g.
@@ -268,8 +285,21 @@ CONFLICTING TIPS  -  start here
 
 Tips ranked by how many groups removing them would repair. This is usually the
 shortest path to a conclusion: on the bundled test tree one sequence accounts
-for 10 of the 22 conflicts, so "recheck this accession" replaces "investigate
-22 findings".
+for 10 of the 22 conflicts, so "look at this accession" replaces "investigate
+22 findings". Only supported conflicts count here; a group contradicted only
+by weak branches never puts a tip on this list.
+
+A tip at the top of this list is where to look, not proof of a bad sequence.
+The usual causes are:
+    a misidentified or contaminated sample   often sits on a near-zero
+                                             terminal branch, identical to
+                                             sequences from another family
+    an outdated NCBI classification          e.g. a recently split genus still
+                                             nested in its parent
+    hybridization or allopolyploidy          e.g. polyploid wheats inside
+                                             Aegilops
+    incomplete lineage sorting               common among close species
+    an error in the tree itself
 
     Groups repaired   how many conflicts this tip alone is responsible for
     Role              whether it sits inside groups it does not belong to
@@ -299,6 +329,21 @@ Conflict
     scattered  the group's own members are in different parts of the tree
     both       some of each
 
+Support
+    supported            at least one well-supported branch contradicts the
+                         group - a real conflict
+    weak branches only   not a clade as drawn, but it fits the tree once weak
+                         branches are collapsed into polytomies, so the data
+                         do not actually reject it. These rows sort last.
+
+    An unresolved node fails to confirm a group but does not contradict it.
+    By default a branch of length 1e-05 or less is weak: RAxML and IQ-TREE
+    write 1e-06 or 1e-08 where the data hold no signal, and on real trees
+    14-24% of internal branches are like that. Add a support threshold under
+    Analysis > Weak Branch Settings (or --min-support on the command line).
+    The settings are remembered between runs; re-run the analysis after
+    changing them.
+
 One tip explains it
     The tip whose removal would repair the group. Sometimes more than one tip
     would do equally well, and the cell then reads "Cucurbita_pepo or 2
@@ -322,8 +367,9 @@ FILTERS AND MERGING
 
 Show rank      narrow to genus, family, order and so on. Includes "clade" and
                "no rank", which is where most of the deep conflicts live.
-Conflict       narrow to intruded, scattered or both. Use "intruded" to hunt
-               foreign sequences, "scattered" to find sampling problems.
+Conflict       narrow to supported conflicts, weak-branch-only ones, or to
+               intruded, scattered or both. Use "intruded" to hunt foreign
+               sequences, "scattered" to find sampling problems.
 Merge groups with identical tips
                When several nested ranks contain exactly the same sampled
                tips the tree cannot tell them apart, so they share one
@@ -332,11 +378,28 @@ Merge groups with identical tips
 
 Filters change what is displayed, never what was computed.
 
+WHAT IS NOT TESTED
+
+NCBI placeholder bins - "Salvia incertae sedis", "unclassified Poaceae",
+"environmental samples" - only collect organisms whose placement is unknown.
+Nobody claims they are monophyletic, so they are never tested and never used
+to label a clade. Groups with a single sampled tip, and groups covering every
+tip, say nothing and are skipped too.
+
+SPECIES-LEVEL CONFLICTS
+
+The exported report lists species and infraspecific conflicts in their own
+section. Non-monophyletic species are common in real data - incomplete lineage
+sorting, introgression, or a species sampled alongside its own subspecies - so
+they weigh less than a broken genus or family.
+
 TIP MATCHING
 
 Which tips matched nothing, which matched only after dropping name tokens
-(so they sit at a coarser rank than their label suggests), and which names are
-ambiguous because unrelated taxa share them.
+(so they sit at a coarser rank than their label suggests), which names are
+ambiguous because unrelated taxa share them, and which taxon IDs are outdated
+(merged by NCBI into a newer ID, which was used instead). An ID NCBI has
+deleted outright cannot be matched and is listed under "No match".
 
 Tips that match nothing are reported but never counted as intruders. A
 sequence we could not place is not evidence that a group is broken, and
@@ -354,11 +417,12 @@ at what is responsible. That serves several quite different purposes.
 1. SEQUENCE QC BEFORE A REAL ANALYSIS
 
 The strongest use. Run it on your gene trees and read the Conflicting Tips
-tab: you get a ranked list of sequences to re-check before concatenation,
-coalescent analysis or divergence dating.
+tab: you get a ranked list of sequences worth a second look before
+concatenation, coalescent analysis or divergence dating.
 
 The diagnostic pattern is a biologically impossible placement on a
-WELL-SUPPORTED branch. A poorly supported misplacement is phylogenetic noise.
+WELL-SUPPORTED branch. A poorly supported misplacement is phylogenetic noise,
+which is why conflicts across weak branches are reported separately.
 A strongly supported one is a data problem - a mislabelled accession, a sample
 swap, contamination, or a mis-assembled contig. Catching that here costs
 seconds; catching it after an MCMC run does not.
@@ -421,7 +485,8 @@ WHAT IT CANNOT TELL YOU
 
 It finds disagreement. It cannot tell you which of three things is at fault:
 a wrong sequence, a wrong tree, or a taxonomy that has not caught up with the
-biology. Deep groups showing as broken often reflect sampling and rooting
+biology - and real biology (hybridization, lineage sorting) produces genuine
+conflicts that are not errors at all. Deep groups showing as broken often reflect sampling and rooting
 rather than a real result, and the tool flags them the same way it flags a
 single contaminated tip. Interpretation stays with you.
 
