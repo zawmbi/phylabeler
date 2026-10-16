@@ -34,7 +34,8 @@ from archive_io import (ArchiveError, extract_matching, is_archive,
                         strip_compression_suffix)
 from taxonomy_db import TaxonomyDB
 from tree_parser import is_tree_filename, parse_newick_file
-from monophyly import MonophylyChecker
+from monophyly import (CONFLICT_CAUSES_NOTE, DEFAULT_MIN_BRANCH_LENGTH,
+                       MonophylyChecker, is_species_level)
 
 
 def cli_progress(msg):
@@ -85,7 +86,8 @@ def run_cli(args):
     print(f"Taxonomy loaded: {len(db.code_to_parent):,} taxa",
           file=sys.stderr)
 
-    checker = MonophylyChecker(db)
+    checker = MonophylyChecker(db, min_branch_length=args.min_branch_length,
+                               min_support=args.min_support)
 
     # Single tree mode
     if args.tree:
@@ -130,19 +132,22 @@ def _process_single(args, checker):
     print(f"Report written to: {report_out}", file=sys.stderr)
 
     groups = analysis["groups"]
-    broken = [g for g in groups if not g.is_monophyletic]
+    broken = [g for g in groups if g.is_broken]
+    weak_only = sum(1 for g in groups if g.is_unsupported_conflict)
+    species = sum(1 for g in broken if is_species_level(g.rank))
     print(f"\nResults: {len(taxon_results)} taxonomic groups with 2+ tips "
-          f"({len(groups)} distinct), {len(broken)} not monophyletic, "
-          f"{len(unresolved)} unresolved tips")
+          f"({len(groups)} distinct), {len(broken)} not monophyletic "
+          f"({species} at species level or below), {weak_only} contradicted "
+          f"only by weak branches, {len(unresolved)} unresolved tips")
 
-    # Lead with the sequences worth rechecking: on a real tree a single
-    # misplaced one accounts for most of the broken groups.
+    # Lead with the tips behind most conflicts: on a real tree one misplaced
+    # sample often accounts for several broken groups.
     show = checker.db.display_label
     repairing = [t for t in analysis["conflicting_tips"] if t.repairs]
     if repairing:
         fixable = sum(len(t.repairs) for t in repairing)
-        print(f"\nCheck these sequences first "
-              f"({fixable} of {len(broken)} groups repaired):")
+        print(f"\nTips behind the most conflicts "
+              f"({fixable} of {len(broken)} supported conflicts):")
         for tip in repairing[:5]:
             names = ", ".join(g.name for g in tip.repairs[:3])
             if len(tip.repairs) > 3:
@@ -151,16 +156,18 @@ def _process_single(args, checker):
                   f"({tip.role}): {names}")
         if len(repairing) > 5:
             print(f"  ... {len(repairing) - 5} more single-group tips")
+        print("  " + CONFLICT_CAUSES_NOTE)
 
-    if broken:
-        print("\nConflicting groups (cheapest fix first):")
-        for g in sorted(broken, key=lambda x: x.severity_sort_key())[:15]:
+    above = [g for g in broken if not is_species_level(g.rank)]
+    if above:
+        print("\nConflicting groups above species level (cheapest fix first):")
+        for g in sorted(above, key=lambda x: x.severity_sort_key())[:15]:
             blame = show(g.culprit) if g.culprit else "no single tip"
             print(f"  move {g.conflict_cost:<4} {g.name} "
                   f"({g.rank}, {g.member_count} members)"
                   f"  <- {blame}")
-        if len(broken) > 15:
-            print(f"  ... {len(broken) - 15} more; full detail in {report_out}")
+        if len(above) > 15:
+            print(f"  ... {len(above) - 15} more; full detail in {report_out}")
 
 
 def _collect_batch_trees(source, workdir):
@@ -233,8 +240,7 @@ def _run_batch(args, checker, tree_files):
                 f.write(checker.get_summary(
                     results, taxa, analysis["matches"]) + "\n")
 
-            broken = [g for g in analysis["groups"]
-                      if not g.is_monophyletic]
+            broken = [g for g in analysis["groups"] if g.is_broken]
             repairing = [t for t in analysis["conflicting_tips"] if t.repairs]
             # Across many gene trees, "which sequence keeps causing this?"
             # is the question worth answering per tree.
@@ -313,7 +319,23 @@ def main():
                              "taxon_support writes Anthocerotophyta/100 and "
                              "keeps the input's bootstrap values (default)")
 
+    # Branch support
+    parser.add_argument("--min-branch-length", type=float,
+                        dest="min_branch_length",
+                        default=DEFAULT_MIN_BRANCH_LENGTH,
+                        help="Internal branches this short or shorter are "
+                             "treated as unresolved, so they never count "
+                             "against a group (default: %(default)g; "
+                             "-1 disables)")
+    parser.add_argument("--min-support", type=float, dest="min_support",
+                        default=None,
+                        help="Treat branches with support below this as "
+                             "unresolved, on the tree's own scale (e.g. 70 "
+                             "for bootstrap, 0.95 for posteriors)")
+
     args = parser.parse_args()
+    if args.min_branch_length is not None and args.min_branch_length < 0:
+        args.min_branch_length = None
 
     # Decide CLI vs GUI
     has_cli_args = (args.tree or args.batch or args.download or

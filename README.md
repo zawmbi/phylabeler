@@ -88,6 +88,13 @@ selecting the row lists them all — with only two sampled members of a group
 the tree genuinely cannot say which one moved, and naming one as the answer
 would be a guess dressed as a finding.
 
+Internal branches of length 1e-05 or less are treated as unresolved, so a
+group split only across them is reported as "contradicted only by weak
+branches" rather than broken. `--min-support 70` (on the tree's own scale)
+does the same for poorly supported branches; `--min-branch-length -1` turns
+the length test off. Species-level conflicts are listed separately, and NCBI
+placeholder bins ("incertae sedis", "unclassified") are never tested.
+
 Bootstrap/support values in the input are preserved. Labelled trees are written
 as `Fabaceae/98` by default; `--label-format taxon` or `support` writes just one
 or the other.

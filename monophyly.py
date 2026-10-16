@@ -20,6 +20,8 @@ four consecutive "Mesangiospermae" rows describing a single conflict.
 Pure Python stdlib - no external dependencies.
 """
 
+from bisect import bisect_left, bisect_right
+
 from tree_parser import clean_newick_name, copy_tree, index_tips, prune_tips
 
 # Ranks worth reporting on by default, coarse to fine. NCBI also emits
@@ -40,6 +42,33 @@ def is_placeholder_taxon(name):
     """True for NCBI pseudo-taxa that only collect unplaced organisms."""
     lowered = name.lower()
     return any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
+
+
+# Internal branches this short are treated as unresolved. Tree builders write
+# 1e-6 or 1e-8 where the data hold no information for a split (RAxML and
+# IQ-TREE's minimum length), and an arbitrary resolution of a polytomy is no
+# evidence against a group.
+DEFAULT_MIN_BRANCH_LENGTH = 1e-5
+
+
+# Ranks at or below species, where non-monophyly is common biology rather
+# than a likely error.
+SPECIES_LEVEL_RANKS = ("species", "subspecies", "varietas", "forma",
+                       "subvariety", "forma specialis", "strain", "isolate",
+                       "serotype", "serogroup", "biotype", "pathogroup",
+                       "morph", "genotype")
+
+CONFLICT_CAUSES_NOTE = (
+    "A conflict is not proof of a bad sequence. Possible causes: a "
+    "misidentified or contaminated sample, an outdated NCBI classification, "
+    "hybridization or introgression, incomplete lineage sorting, or an error "
+    "in the tree itself.")
+
+
+def is_species_level(rank):
+    """True for species and infraspecific ranks (e.g. "species–subspecies")."""
+    first = (rank or "").split("\u2013")[0].strip()
+    return first in SPECIES_LEVEL_RANKS
 
 
 # How many equally-cheap repairs to keep per group. Enough to show a
@@ -127,6 +156,20 @@ class TaxonResult:
         return self.status == "monophyletic"
 
     @property
+    def is_broken(self):
+        """Contradicted by at least one supported branch."""
+        return self.status == "not_monophyletic"
+
+    @property
+    def is_unsupported_conflict(self):
+        """Not a clade as drawn, but only weak branches stand in the way.
+
+        Collapse the near-zero-length or low-support branches into polytomies
+        and the group is compatible with the tree: the data do not reject it.
+        """
+        return self.status == "unsupported_conflict"
+
+    @property
     def clade_tips(self):
         """Tips under the group's home clade, computed on demand."""
         if self._clade_tips is None:
@@ -149,7 +192,7 @@ class TaxonResult:
     @property
     def conflict_type(self):
         """Whether foreign tips are inside, members are outside, or both."""
-        if self.is_monophyletic:
+        if not self.conflict_cost:
             return ""
         if not self.outliers:
             return "intruded"
@@ -192,8 +235,9 @@ class TaxonResult:
         return len(self.clusters)
 
     def severity_sort_key(self):
-        """Easiest to fix first, then the biggest groups."""
-        return (self.conflict_cost, -self.member_count, self.name)
+        """Supported conflicts first, then easiest to fix, then biggest."""
+        return (self.is_unsupported_conflict, self.conflict_cost,
+                -self.member_count, self.name)
 
     def rank_sort_key(self):
         """Sort coarse ranks first, unranked groups last."""
@@ -270,9 +314,68 @@ class ConflictingTip:
 class MonophylyChecker:
     """Check monophyly of tree clades against NCBI taxonomy."""
 
-    def __init__(self, taxonomy_db):
+    def __init__(self, taxonomy_db, min_branch_length=DEFAULT_MIN_BRANCH_LENGTH,
+                 min_support=None):
+        """`min_branch_length` and `min_support` define a weak branch: one no
+        longer than the length, or with support below the threshold (on the
+        tree's own scale, 0-1 or 0-100). None disables either test.
+        """
         self.db = taxonomy_db
+        self.min_branch_length = min_branch_length
+        self.min_support = min_support
         self._lineages = {}
+
+    def weak_branch_description(self):
+        """The weak-branch rule in words, for reports."""
+        parts = []
+        if self.min_branch_length is not None:
+            parts.append(f"length <= {self.min_branch_length:g}")
+        if self.min_support is not None:
+            parts.append(f"support < {self.min_support:g}")
+        return " or ".join(parts) if parts else "none (every branch counts)"
+
+    def _weak_nodes(self, root):
+        """ids of internal non-root nodes whose branch is too weak to count."""
+        weak = set()
+        for node in root.post_order():
+            if node.is_tip or node.parent is None:
+                continue
+            length, support = node.branch_length, node.support
+            try:
+                if (self.min_branch_length is not None and length is not None
+                        and float(length) <= self.min_branch_length):
+                    weak.add(id(node))
+                elif (self.min_support is not None and support is not None
+                        and float(support) < self.min_support):
+                    weak.add(id(node))
+            except ValueError:
+                continue
+        return weak
+
+    @staticmethod
+    def _compatible(mrca, weak, member_positions, spans, resolved_prefix):
+        """Is the group compatible with the tree once weak branches collapse?
+
+        Climb from the members' MRCA to the polytomy it belongs to, then
+        check that each lineage leaving that polytomy holds only members or
+        no members. Unresolved tips stay wildcards, as everywhere else.
+        """
+        node = mrca
+        while id(node) in weak:
+            node = node.parent
+        stack = list(node.children)
+        while stack:
+            child = stack.pop()
+            if id(child) in weak:
+                stack.extend(child.children)
+                continue
+            lo, hi, _span = spans[id(child)]
+            inside = (bisect_right(member_positions, hi)
+                      - bisect_left(member_positions, lo))
+            resolved = resolved_prefix[hi + 1] - resolved_prefix[lo]
+            if inside and inside != resolved:
+                return False
+        return True
 
     # ---- Tip resolution ----
 
@@ -356,6 +459,7 @@ class MonophylyChecker:
                 members_by_taxon.setdefault(code, []).append(node)
 
         clusters, homes, mrcas = self._taxon_pass(root, tip_lineages)
+        weak = self._weak_nodes(root)
 
         unresolved_set = set(unresolved)
         results = []
@@ -394,8 +498,15 @@ class MonophylyChecker:
                     else:
                         result.intruders.append(tip)
 
-            result.status = ("monophyletic" if result.conflict_cost == 0
-                             else "not_monophyletic")
+            if result.conflict_cost == 0:
+                result.status = "monophyletic"
+            elif weak and self._compatible(
+                    mrca_node, weak,
+                    sorted(position[id(n)] for n in member_nodes),
+                    spans, resolved_prefix):
+                result.status = "unsupported_conflict"
+            else:
+                result.status = "not_monophyletic"
             if result.conflict_cost == 1:
                 result.repair_options = self._single_tip_repairs(
                     result, member_nodes, position, spans, resolved_prefix,
@@ -405,10 +516,13 @@ class MonophylyChecker:
         results.sort(key=TaxonResult.rank_sort_key)
 
         if progress_callback:
-            broken = sum(1 for r in results if not r.is_monophyletic)
+            broken = sum(1 for r in results if r.is_broken)
+            weak_only = sum(1 for r in results if r.is_unsupported_conflict)
             progress_callback(
                 f"Checked {len(results)} taxonomic groups: "
-                f"{len(results) - broken} monophyletic, {broken} broken"
+                f"{len(results) - broken - weak_only} monophyletic, "
+                f"{broken} broken, {weak_only} contradicted only by weak "
+                f"branches"
             )
         return results
 
@@ -848,17 +962,21 @@ class MonophylyChecker:
 
         if taxon_results is not None:
             groups = self.collapse_groups(taxon_results)
-            broken = [g for g in groups if not g.is_monophyletic]
+            broken = [g for g in groups if g.is_broken]
+            weak_only = [g for g in groups if g.is_unsupported_conflict]
             intact = [g for g in groups if g.is_monophyletic]
             collapsed = sum(len(g.taxa) for g in groups if g.is_collapsed)
 
             repairing = [t for t in rank_conflicting_tips(groups) if t.repairs]
             if repairing:
                 fixable = sum(len(t.repairs) for t in repairing)
-                lines.append("=== What To Check First ===")
+                lines.append("=== Tips Behind The Most Conflicts ===")
                 lines.append(
-                    f"Rechecking {plural(len(repairing), 'sequence')} would "
-                    f"repair {fixable} of {len(broken)} conflicting groups.")
+                    f"Removing any one of these {plural(len(repairing), 'tip')}"
+                    f" on its own makes groups monophyletic; together they "
+                    f"account for {fixable} of {len(broken)} supported "
+                    f"conflicts.")
+                lines.append(CONFLICT_CAUSES_NOTE)
                 lines.append("")
                 for tip in repairing[:10]:
                     names = ", ".join(g.name for g in tip.repairs[:6])
@@ -879,46 +997,65 @@ class MonophylyChecker:
                     f"Rows shown: {len(groups)} "
                     f"({collapsed} taxa share a member set and are merged)")
             lines.append(f"Monophyletic: {len(intact)}")
-            lines.append(f"Not monophyletic: {len(broken)}")
+            lines.append(f"Not monophyletic (supported conflict): "
+                         f"{len(broken)}")
+            lines.append(f"Contradicted only by weak branches: "
+                         f"{len(weak_only)}")
+            lines.append(f"Weak branch: {self.weak_branch_description()}")
             lines.append("")
 
-            if broken:
-                lines.append("--- Groups Broken In This Tree ---")
-                lines.append("Cost = fewest tips that would have to move.")
+            def describe(g):
+                lines.append(f"  {g.name} ({g.rank}) "
+                             f"[{g.member_count} members]")
+                lines.append(f"      fix: move {plural(g.conflict_cost, 'tip')}"
+                             f" ({g.conflict_type})")
+                if g.culprit:
+                    lines.append(f"      single-tip fix: {show(g.culprit)}")
+                if g.intruders:
+                    listed = ", ".join(map(show, g.intruders[:5]))
+                    if len(g.intruders) > 5:
+                        listed += f"... (+{len(g.intruders) - 5} more)"
+                    lines.append(f"      {plural(len(g.intruders), 'tip')} "
+                                 f"inside: {listed}")
+                if g.outliers:
+                    listed = ", ".join(map(show, g.outliers[:5]))
+                    if len(g.outliers) > 5:
+                        listed += f"... (+{len(g.outliers) - 5} more)"
+                    lines.append(f"      {plural(len(g.outliers), 'member')} "
+                                 f"outside: {listed}")
+                if g.is_collapsed:
+                    lines.append(
+                        "      same tips as: "
+                        + ", ".join(f"{t.name} ({t.rank or 'no rank'})"
+                                    for t in g.taxa))
+                if g.unknown_inside:
+                    lines.append(f"      unplaced tips inside: "
+                                 f"{len(g.unknown_inside)} (not counted as "
+                                 f"intruders)")
+
+            above = [g for g in broken if not is_species_level(g.rank)]
+            species = [g for g in broken if is_species_level(g.rank)]
+            sections = (
+                ("--- Groups Broken In This Tree ---",
+                 "Cost = fewest tips that would have to move.", above),
+                ("--- Species-Level Conflicts ---",
+                 "Species and infraspecific taxa are often non-monophyletic "
+                 "in real data (incomplete lineage sorting, introgression, "
+                 "subspecies sampled alongside the species), so these weigh "
+                 "less than a broken genus or family.", species),
+                ("--- Contradicted Only By Weak Branches ---",
+                 "Not a clade as drawn, but compatible with the tree once weak "
+                 "branches are collapsed. The data do not reject these "
+                 "groups.", weak_only),
+            )
+            for title, note, rows in sections:
+                if not rows:
+                    continue
+                lines.append(title)
+                lines.append(note)
                 lines.append("")
-                for g in sorted(broken, key=lambda x: x.severity_sort_key()):
-                    lines.append(
-                        f"  {g.name} ({g.rank}) "
-                        f"[{g.member_count} members]")
-                    lines.append(
-                        f"      fix: move {plural(g.conflict_cost, 'tip')} "
-                        f"({g.conflict_type})")
-                    if g.culprit:
-                        lines.append(f"      blame: {show(g.culprit)}")
-                    if g.intruders:
-                        listed = ", ".join(map(show, g.intruders[:5]))
-                        if len(g.intruders) > 5:
-                            listed += f"... (+{len(g.intruders) - 5} more)"
-                        lines.append(
-                            f"      {plural(len(g.intruders), 'tip')} "
-                            f"inside: {listed}")
-                    if g.outliers:
-                        listed = ", ".join(map(show, g.outliers[:5]))
-                        if len(g.outliers) > 5:
-                            listed += f"... (+{len(g.outliers) - 5} more)"
-                        lines.append(
-                            f"      {plural(len(g.outliers), 'member')} "
-                            f"outside: {listed}")
-                    if g.is_collapsed:
-                        lines.append(
-                            "      same tips as: "
-                            + ", ".join(f"{t.name} ({t.rank or 'no rank'})"
-                                        for t in g.taxa))
-                    if g.unknown_inside:
-                        lines.append(
-                            f"      unplaced tips inside: "
-                            f"{len(g.unknown_inside)} (not counted as "
-                            f"intruders)")
+                for g in sorted(rows, key=lambda x: x.severity_sort_key()):
+                    describe(g)
                 lines.append("")
 
             if intact:
@@ -1075,7 +1212,9 @@ def rank_conflicting_tips(taxon_results):
         return tip
 
     for result in taxon_results:
-        if result.is_monophyletic:
+        # Only supported conflicts implicate a tip; an arbitrary resolution
+        # of a polytomy is no evidence against anything.
+        if not result.is_broken:
             continue
         for label in result.intruders:
             entry(label).appears_in.append(result)

@@ -26,8 +26,8 @@ from tkinter import font as tkfont
 from archive_io import extract_matching, is_archive
 from taxonomy_db import TaxonomyDB
 from tree_parser import is_tree_filename, parse_newick_file
-from monophyly import (MAIN_RANKS, CollapsedGroup, ConflictingTip,
-                       MonophylyChecker, plural as _plural)
+from monophyly import (DEFAULT_MIN_BRANCH_LENGTH, MAIN_RANKS, CollapsedGroup,
+                       ConflictingTip, MonophylyChecker, plural as _plural)
 from help_content import HELP_SECTIONS, PANEL_HELP
 
 # File-dialog filters, kept next to each other so CLI and GUI stay in sync.
@@ -609,6 +609,10 @@ class PhyLabelerApp:
         self.theme_var = tk.StringVar(value=self.theme_name)
         self.show_legend_var = tk.BooleanVar(
             value=bool(settings.get("legend", True)))
+        # What counts as a weak branch; see MonophylyChecker.
+        self.min_branch_length = settings.get(
+            "min_branch_length", DEFAULT_MIN_BRANCH_LENGTH)
+        self.min_support = settings.get("min_support")
         self._configure_styles()
         self.current_tree = None
         self.results = None
@@ -796,6 +800,74 @@ class PhyLabelerApp:
 
     # ---- Settings ----
 
+    def _make_checker(self):
+        return MonophylyChecker(self.db,
+                                min_branch_length=self.min_branch_length,
+                                min_support=self.min_support)
+
+    def _edit_weak_branch_settings(self):
+        """Let the user say which branches are too weak to count."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Weak Branch Settings")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, wraplength=380, justify=tk.LEFT, text=(
+            "A group split only by weak branches is reported as "
+            "'weak branches only' instead of broken: collapse those "
+            "branches into polytomies and the group fits the tree. Leave a "
+            "box empty to switch that test off.")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        length_var = tk.StringVar(value="" if self.min_branch_length is None
+                                  else f"{self.min_branch_length:g}")
+        support_var = tk.StringVar(value="" if self.min_support is None
+                                   else f"{self.min_support:g}")
+        ttk.Label(frame, text="Branch length at or below:").grid(
+            row=1, column=0, sticky="w")
+        ttk.Entry(frame, textvariable=length_var, width=12).grid(
+            row=1, column=1, sticky="w", padx=6)
+        ttk.Label(frame, text="Support below (tree's own scale,\n"
+                              "e.g. 70 bootstrap or 0.95 posterior):").grid(
+            row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(frame, textvariable=support_var, width=12).grid(
+            row=2, column=1, sticky="w", padx=6, pady=(6, 0))
+
+        def parse(text, label):
+            text = text.strip()
+            if not text:
+                return None
+            try:
+                return float(text)
+            except ValueError:
+                raise ValueError(f"{label} must be a number or empty.")
+
+        def apply():
+            try:
+                length = parse(length_var.get(), "Branch length")
+                support = parse(support_var.get(), "Support")
+            except ValueError as e:
+                messagebox.showerror("Weak Branch Settings", str(e),
+                                     parent=dialog)
+                return
+            self.min_branch_length, self.min_support = length, support
+            self._save_settings()
+            dialog.destroy()
+            if self.results:
+                self._update_status(
+                    "Weak-branch settings changed - run the analysis again "
+                    "to apply them.")
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(
+            side=tk.RIGHT)
+        ttk.Button(buttons, text="Apply", command=apply).pack(
+            side=tk.RIGHT, padx=6)
+        dialog.grab_set()
+
     def _settings_path(self):
         return os.path.join(self.db.cache_dir, "settings.json")
 
@@ -812,7 +884,9 @@ class PhyLabelerApp:
         try:
             with open(self._settings_path(), "w", encoding="utf-8") as handle:
                 json.dump({"theme": self.theme_name,
-                           "legend": self.show_legend_var.get()}, handle)
+                           "legend": self.show_legend_var.get(),
+                           "min_branch_length": self.min_branch_length,
+                           "min_support": self.min_support}, handle)
         except OSError:
             pass          # a read-only cache dir is not worth an error dialog
 
@@ -1146,6 +1220,11 @@ class PhyLabelerApp:
                               command=self._toggle_fullscreen)
         menubar.add_cascade(label="View", menu=view_menu)
 
+        analysis_menu = tk.Menu(menubar, tearoff=0)
+        analysis_menu.add_command(label="Weak Branch Settings...",
+                                  command=self._edit_weak_branch_settings)
+        menubar.add_cascade(label="Analysis", menu=analysis_menu)
+
         help_menu = tk.Menu(menubar, tearoff=0)
         for title, _body in HELP_SECTIONS:
             help_menu.add_command(
@@ -1310,7 +1389,8 @@ class PhyLabelerApp:
         conflict_filter = ttk.Combobox(
             conflict_row, textvariable=self.conflict_filter_var,
             state="readonly", width=11,
-            values=["all conflicts", "intruded", "scattered", "both"])
+            values=["all conflicts", "supported only", "weak branches only",
+                    "intruded", "scattered", "both"])
         conflict_filter.pack(side=tk.LEFT, padx=4)
         conflict_filter.bind(
             "<<ComboboxSelected>>", lambda e: self._populate_group_tables())
@@ -1484,6 +1564,7 @@ class PhyLabelerApp:
             columns=[("name", "Group", 200), ("rank", "Rank", 120),
                      ("members", "Members", 70),
                      ("cost", "Tips to move", 90), ("type", "Conflict", 80),
+                     ("support", "Support", 110),
                      ("culprit", "One tip explains it", 230),
                      ("intruders", "Intruders", 70), ("outliers", "Outliers", 70),
                      ("tips", "Intruding tips", 380)],
@@ -1935,7 +2016,7 @@ class PhyLabelerApp:
             # reparses it, so recompute against the tree now on screen -
             # cheap, and it keeps the colouring and the tables in step.
             if os.path.basename(filepath) in self.batch_results and self.db.loaded:
-                checker = MonophylyChecker(self.db)
+                checker = self._make_checker()
                 analysis = checker.analyze(self.current_tree)
                 checker.label_tree(self.current_tree, analysis["node_results"])
                 self._apply_analysis(analysis)
@@ -2621,7 +2702,7 @@ class PhyLabelerApp:
         selected_name = (os.path.basename(selection[0]) if selection else None)
 
         def analyze():
-            checker = MonophylyChecker(self.db)
+            checker = self._make_checker()
             analysis = checker.analyze(
                 self.current_tree, progress_callback=self._update_status)
             checker.label_tree(self.current_tree, analysis["node_results"])
@@ -2671,7 +2752,7 @@ class PhyLabelerApp:
         selected_path = selection[0] if selection else None
 
         def analyze_batch():
-            checker = MonophylyChecker(self.db)
+            checker = self._make_checker()
             total = len(targets)
             for idx, fp in enumerate(targets):
                 basename = os.path.basename(fp)
@@ -2703,14 +2784,14 @@ class PhyLabelerApp:
         if not self.results:
             return
 
-        checker = MonophylyChecker(self.db)
+        checker = self._make_checker()
         self.summary_text.insert(tk.END, checker.get_summary(
             self.results, self.taxon_results, self.tip_matches))
 
         self._populate_group_tables()
         self._populate_tip_matching()
 
-        if any(not g.is_monophyletic for g in self.groups):
+        if any(g.is_broken for g in self.groups):
             self.results_notebook.select(self.nonmono_frame)
 
     def _remember_row(self, table, row, payload):
@@ -2750,7 +2831,13 @@ class PhyLabelerApp:
         for group in sorted(broken, key=lambda g: g.severity_sort_key()):
             if not self._matches_rank_filter(group):
                 continue
-            if (wanted_conflict != "all conflicts"
+            if wanted_conflict == "supported only":
+                if not group.is_broken:
+                    continue
+            elif wanted_conflict == "weak branches only":
+                if not group.is_unsupported_conflict:
+                    continue
+            elif (wanted_conflict != "all conflicts"
                     and group.conflict_type != wanted_conflict):
                 continue
             listed = ", ".join(group.intruders[:12])
@@ -2759,10 +2846,12 @@ class PhyLabelerApp:
             row = self.nonmono_tree.insert("", tk.END, values=(
                 group.name, group.rank, group.member_count,
                 group.conflict_cost, group.conflict_type,
+                "weak branches only" if group.is_unsupported_conflict
+                else "supported",
                 group.culprit_summary(), len(group.intruders),
                 len(group.outliers), listed))
             self._remember_row(self.nonmono_tree, row, group)
-            self._add_constituent_rows(self.nonmono_tree, row, group, 9)
+            self._add_constituent_rows(self.nonmono_tree, row, group, 10)
             shown_broken += 1
 
         for group in sorted(intact, key=lambda g: g.rank_sort_key()):
@@ -2807,13 +2896,16 @@ class PhyLabelerApp:
                 len(tip.appears_in), names))
             self._remember_row(self.conflict_tree, row, tip)
 
-        broken = sum(1 for g in self.groups if not g.is_monophyletic)
+        broken = sum(1 for g in self.groups if g.is_broken)
         fixable = sum(len(t.repairs) for t in repairing)
         if repairing:
             self.conflict_banner.configure(
-                text=f"Rechecking {_plural(len(repairing), 'sequence')} "
-                     f"would repair {fixable} of {broken} conflicting "
-                     f"groups.")
+                text=f"Removing any one of these "
+                     f"{_plural(len(repairing), 'tip')} repairs groups; "
+                     f"together they account for {fixable} of {broken} "
+                     f"supported conflicts. A conflict can also mean "
+                     f"outdated taxonomy, hybridization or lineage sorting, "
+                     f"not only a bad sample.")
         elif broken:
             self.conflict_banner.configure(
                 text="No single tip explains any conflict here - every one "
@@ -2906,6 +2998,9 @@ class PhyLabelerApp:
                            f"{_plural(len(entry.outliers), 'outlier')}"
                            f" - move {_plural(entry.conflict_cost, 'tip')} "
                            f"({entry.conflict_type})")
+                if entry.is_unsupported_conflict:
+                    status += ("  |  only weak branches contradict it, so "
+                               "the data do not reject this group")
                 # Say plainly when the named tip is a choice, not the answer.
                 if entry.is_ambiguous:
                     status += ("  |  any ONE of these repairs it: "
@@ -3065,7 +3160,7 @@ class PhyLabelerApp:
             ]
         )
         if filepath:
-            checker = MonophylyChecker(self.db)
+            checker = self._make_checker()
             report = checker.get_summary(
                 self.results, self.taxon_results, self.tip_matches)
 

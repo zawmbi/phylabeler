@@ -223,6 +223,44 @@ def test_placeholder_taxa():
           False)
 
 
+def test_weak_branches(db):
+    print("\nConflicts across weak branches are not evidence")
+    # Homo erectus sits with Drosophila melanogaster, but only across a
+    # zero-length branch; Drosophila is split across real branches.
+    newick = ("((Homo_sapiens,(Homo_erectus,Drosophila_melanogaster)"
+              "{weak}):0.1,(Drosophila_simulans,Rosa_canina):0.1);")
+    tree = parse_newick(newick.format(weak=":0.000001"))
+    by_name = {r.name: r for r in
+               MonophylyChecker(db).analyze(tree)["taxon_results"]}
+    check("zero-length conflict is unsupported",
+          by_name["Homo"].status, "unsupported_conflict")
+    check("still costs a move as drawn", by_name["Homo"].conflict_cost, 1)
+    check("real conflict stays broken",
+          by_name["Drosophila"].status, "not_monophyletic")
+
+    tree = parse_newick(newick.format(weak=":0.000001"))
+    by_name = {r.name: r for r in MonophylyChecker(
+        db, min_branch_length=None).analyze(tree)["taxon_results"]}
+    check("threshold off: every branch counts",
+          by_name["Homo"].status, "not_monophyletic")
+
+    tree = parse_newick(newick.format(weak="50:0.2"))
+    by_name = {r.name: r for r in MonophylyChecker(
+        db, min_support=70).analyze(tree)["taxon_results"]}
+    check("low support counts as weak",
+          by_name["Homo"].status, "unsupported_conflict")
+    tree = parse_newick(newick.format(weak="95:0.2"))
+    by_name = {r.name: r for r in MonophylyChecker(
+        db, min_support=70).analyze(tree)["taxon_results"]}
+    check("high support counts", by_name["Homo"].status, "not_monophyletic")
+
+    out = MonophylyChecker(db).analyze(
+        parse_newick(newick.format(weak=":0.000001")))
+    blamed = {t.label for t in out["conflicting_tips"]}
+    check("weak-only conflicts blame no tip",
+          blamed.isdisjoint({"Homo_sapiens", "Homo_erectus"}), True)
+
+
 def test_monophyly(db):
     checker = MonophylyChecker(db)
 
@@ -581,6 +619,7 @@ def main():
     test_taxid_tips(db)
     test_parsing()
     test_placeholder_taxa()
+    test_weak_branches(db)
     test_index_tips()
     test_monophyly(db)
     test_conflict_costs(db)

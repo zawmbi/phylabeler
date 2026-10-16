@@ -54,8 +54,10 @@ PANEL_HELP = {
     ),
     "results": (
         "One row per taxonomic group, not per tree node.\n\n"
-        "Broken Groups is sorted so the cheapest fixes come first. Start with\n"
-        "the Conflicting Tips tab: it names the sequences worth rechecking.",
+        "Broken Groups is sorted so supported, cheapest fixes come first;\n"
+        "rows contradicted only by weak branches come last. Conflicting Tips\n"
+        "names the tips behind the most conflicts - a bad sample, or outdated\n"
+        "taxonomy, hybridization or lineage sorting.",
         "Reading Results",
     ),
 }
@@ -423,16 +425,27 @@ biology. Deep groups showing as broken often reflect sampling and rooting
 rather than a real result, and the tool flags them the same way it flags a
 single contaminated tip. Interpretation stays with you.
 
-It also does not weigh conflicts by branch support. Support values are
-preserved, drawn and exported, but a conflict on a 30%-support branch and one
-on a 100%-support branch are reported alike, and only the second is worth
-acting on. Check the support on the branches involved before drawing a
-conclusion.
+WEAK BRANCHES AND POLYTOMIES
 
-A polytomy is reported as a conflict even though an unresolved node does not
-actually contradict a group - it simply fails to confirm it. And rooting
-matters: change the root and you change which groups look monophyletic, so
-root deliberately before running this.
+An unresolved node does not contradict a group - it simply fails to confirm
+it. PhyLabeler therefore treats weak branches as polytomies: by default any
+internal branch of length 1e-05 or less, the placeholder length RAxML and
+IQ-TREE write where the data hold no signal. A group that fits the tree once
+those collapse is reported as "weak branches only" rather than broken, sorted
+after the supported conflicts, and never used to blame a tip.
+
+Support is not used by default because trees mix scales (0-1 posteriors,
+0-100 bootstraps). Set a threshold under Analysis > Weak Branch Settings, or
+--min-support 70 on the command line, to treat poorly supported branches the
+same way. --min-branch-length -1 switches the length test off.
+
+Species and infraspecific groups are listed separately in the report.
+Non-monophyletic species are common biology (incomplete lineage sorting,
+introgression, subspecies sampled with their species), so weigh them less
+than a broken genus or family.
+
+And rooting matters: change the root and you change which groups look
+monophyletic, so root deliberately before running this.
 
 IT DOES NOT INFER TREES
 
